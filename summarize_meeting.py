@@ -59,7 +59,7 @@ SPEACHES_URL  = os.getenv("SPEACHES_URL", "http://localhost:8000")
 OLLAMA_URL    = os.getenv("OLLAMA_URL",   "http://localhost:11434")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "Systran/faster-whisper-large-v3")
 CLAUDE_MODEL  = os.getenv("CLAUDE_MODEL",  "claude-sonnet-4-6")
-OLLAMA_MODEL  = os.getenv("OLLAMA_MODEL",  "qwen2.5:latest")
+OLLAMA_MODEL  = os.getenv("OLLAMA_MODEL",  "gemma4:e4b")
 
 # Hallucination detection — sliding window across consecutive segments
 WINDOW_SIZE        = 20    # segments to check at once
