@@ -33,7 +33,7 @@ Examples:
 
 Environment variables:
   ANTHROPIC_API_KEY   Required for --backend claude-api (default)
-  SPEACHES_URL        Speaches server URL (default: http://localhost:8000)
+  WHISPER_URL         Whisper API server URL (default: http://localhost:8000)
   OLLAMA_URL          Ollama server URL (default: http://localhost:11434)
 """
 
@@ -55,7 +55,7 @@ import anthropic
 # config.json lives next to this script and is gitignored.
 CONFIG_PATH = Path(__file__).parent / "config.json"
 
-SPEACHES_URL  = os.getenv("SPEACHES_URL", "http://localhost:8000")
+WHISPER_URL  = os.getenv("WHISPER_URL", "http://localhost:8000")
 OLLAMA_URL    = os.getenv("OLLAMA_URL",   "http://localhost:11434")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "Systran/faster-distil-whisper-large-v3")
 CLAUDE_MODEL  = os.getenv("CLAUDE_MODEL",  "claude-sonnet-4-6")
@@ -161,17 +161,17 @@ def safe_filename(name: str) -> str:
 
 def ensure_model_downloaded(model: str) -> None:
     encoded = model.replace("/", "%2F")
-    print(f"  Downloading model {model} ...")
-    resp = requests.post(f"{SPEACHES_URL}/v1/models/{encoded}", timeout=600)
+    print(f"  Pulling model {model} from Whisper API server ...")
+    resp = requests.post(f"{WHISPER_URL}/v1/models/{encoded}", timeout=600)
     resp.raise_for_status()
     print("  Model ready.")
 
 
 def unload_whisper_model(model: str) -> None:
-    """Unload the Whisper model from server memory via DELETE /api/ps/{model_id}."""
+    """Unload the Whisper model from the API server memory."""
     encoded = model.replace("/", "%2F")
     try:
-        resp = requests.delete(f"{SPEACHES_URL}/api/ps/{encoded}", timeout=30)
+        resp = requests.delete(f"{WHISPER_URL}/api/ps/{encoded}", timeout=30)
         if resp.status_code in (200, 204):
             print("  Whisper model unloaded from server memory.")
         else:
@@ -209,7 +209,7 @@ def transcribe(audio_path: Path, cleanup: list,
                 pass
 
     size_kb = audio_path.stat().st_size // 1024
-    _log(f"Sending {audio_path.name} ({size_kb:,} KB) to Speaches ({WHISPER_MODEL})...")
+    _log(f"Sending {audio_path.name} ({size_kb:,} KB) to Whisper API ({WHISPER_MODEL})...")
 
     data = {
         "model":           WHISPER_MODEL,
@@ -223,7 +223,7 @@ def transcribe(audio_path: Path, cleanup: list,
 
     with open(audio_path, "rb") as fh:
         resp = requests.post(
-            f"{SPEACHES_URL}/v1/audio/transcriptions",
+            f"{WHISPER_URL}/v1/audio/transcriptions",
             files={"file": (audio_path.name, fh, mime_for(audio_path))},
             data=data,
             timeout=3600,
@@ -234,7 +234,7 @@ def transcribe(audio_path: Path, cleanup: list,
         return transcribe(audio_path, cleanup, prompt, hotwords, emit_callback)
 
     if resp.status_code == 500 and audio_path.suffix.lower() != ".mp3":
-        _log("Server error — retrying with MP3 conversion ...")
+        _log("Whisper API error — retrying with MP3 conversion ...")
         return transcribe(convert_to_mp3(audio_path, cleanup), cleanup,
                           prompt, hotwords, emit_callback)
 
@@ -513,9 +513,9 @@ def main():
     parser.add_argument("--context", "-c", default=None,
                         help="Free-text context for the LLM "
                              "(org name, date, start time, etc.)")
-    parser.add_argument("--hotwords", default="",
-                        help="Comma-separated hotwords to improve Whisper "
-                             "transcription accuracy (passed via API)")
+    parser.add_argument("--vocabulary", default="",
+                        help="Comma-separated terms (names, jargon, place names) "
+                             "to improve Whisper transcription accuracy")
     parser.add_argument("--transcript-only", action="store_true",
                         help="Transcribe only; skip minutes generation")
     parser.add_argument("--skip-transcribe", type=Path, metavar="TXT",
@@ -529,11 +529,10 @@ def main():
                         help=f"Ollama model to use (default: {OLLAMA_MODEL}). "
                              "Only used with --backend ollama")
     parser.add_argument("--whisper-model", default=None,
-                        help=f"Whisper model for Speaches transcription "
-                             f"(default: {WHISPER_MODEL}). "
-                             "e.g. Systran/faster-whisper-large-v3")
-    parser.add_argument("--speaches-url", default=None,
-                        help=f"Speaches server URL (default: {SPEACHES_URL})")
+                        help=f"Whisper model ID (default: {WHISPER_MODEL}). "
+                             "e.g. Systran/faster-distil-whisper-large-v3")
+    parser.add_argument("--whisper-url", default=None,
+                        help=f"Whisper API server URL (default: {WHISPER_URL})")
     parser.add_argument("--yes", "-y", action="store_true",
                         help="Skip interactive prompts and use saved defaults")
     args = parser.parse_args()
@@ -562,13 +561,13 @@ def main():
     elif not os.getenv("WHISPER_MODEL"):
         WHISPER_MODEL = cfg.get("whisper_model", WHISPER_MODEL)
 
-    # Speaches URL
-    global SPEACHES_URL
-    if args.speaches_url:
-        SPEACHES_URL = args.speaches_url
-    elif not os.getenv("SPEACHES_URL"):
-        SPEACHES_URL = prompt("Speaches server URL",
-                              cfg.get("speaches_url", SPEACHES_URL))
+    # Whisper API URL
+    global WHISPER_URL
+    if args.whisper_url:
+        WHISPER_URL = args.whisper_url
+    elif not os.getenv("WHISPER_URL"):
+        WHISPER_URL = prompt("Whisper API server URL",
+                             cfg.get("whisper_url", WHISPER_URL))
 
     # Input file
     if not args.skip_transcribe and args.input is None:
@@ -617,7 +616,7 @@ def main():
     # ── Save config for next run ─────────────────────────────────────────────
     if not args.yes:
         save_config({
-            "speaches_url": SPEACHES_URL,
+            "whisper_url": WHISPER_URL,
             "backend":      args.backend,
             "names":        args.names,
             "context":      args.context,
@@ -641,7 +640,7 @@ def main():
 
     # Tracks temp files created during this run (converted MP3, etc.)
     cleanup: list[Path] = []
-    hotwords = args.hotwords or args.names
+    hotwords = args.vocabulary or args.names
 
     try:
         # ── Step 1: Transcribe ──────────────────────────────────────────────

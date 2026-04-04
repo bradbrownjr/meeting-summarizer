@@ -155,14 +155,20 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
         with _jobs_lock:
             _jobs[job_id]["meeting_name"] = meeting_name
 
+        # Merge org vocabulary with any names entered at submit time
+        org_vocab = org.get("vocabulary", "")
+        combined_vocab = ", ".join(filter(None, [org_vocab, names]))
+
         log(f"Starting: {meeting_name}")
         log(f"Audio: {audio_path.name}  ({audio_path.stat().st_size // 1024:,} KB)")
         log(f"Whisper model: {WHISPER_MODEL}")
+        if combined_vocab:
+            log(f"Vocabulary hints: {combined_vocab[:120]}{'...' if len(combined_vocab) > 120 else ''}")
 
-        result = transcribe(audio_path, cleanup, hotwords=names,
+        result = transcribe(audio_path, cleanup, hotwords=combined_vocab,
                             emit_callback=emit_cb)
         transcript = build_clean_transcript(audio_path, result, cleanup,
-                                            hotwords=names,
+                                            hotwords=combined_vocab,
                                             emit_callback=emit_cb)
 
         word_count = len(transcript.split())
@@ -240,6 +246,7 @@ def api_orgs_create():
         "short":            data.get("short", "").strip(),
         "context_template": data.get("context_template", "").strip(),
         "name_template":    data.get("name_template", "Meeting \u2013 {month_year}").strip(),
+        "vocabulary":       data.get("vocabulary", "").strip(),
     }
     save_orgs(orgs)
     return jsonify({"ok": True, "id": org_id, "orgs": orgs})
@@ -258,6 +265,7 @@ def api_orgs_update(org_id: str):
         "short":            data.get("short", "").strip(),
         "context_template": data.get("context_template", "").strip(),
         "name_template":    data.get("name_template", "Meeting \u2013 {month_year}").strip(),
+        "vocabulary":       data.get("vocabulary", "").strip(),
     }
     save_orgs(orgs)
     return jsonify({"ok": True, "orgs": orgs})
@@ -299,11 +307,15 @@ def _apply_org_entries(entries: list[dict], orgs: dict) -> tuple[list, list]:
             errors.append("Entry missing 'label' — skipped")
             continue
         org_id = (entry.get("id") or "").strip() or _make_org_id(label, orgs)
+        vocab = entry.get("vocabulary") or ""
+        if isinstance(vocab, list):
+            vocab = ", ".join(str(v) for v in vocab if v)
         orgs[org_id] = {
             "label":            label,
             "short":            (entry.get("short") or "").strip(),
             "context_template": (entry.get("context_template") or "").strip(),
             "name_template":    (entry.get("name_template") or "Meeting \u2013 {month_year}").strip(),
+            "vocabulary":       vocab.strip(),
         }
         imported.append(label)
     return imported, errors

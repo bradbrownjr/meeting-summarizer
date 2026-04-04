@@ -3,12 +3,14 @@
     "label": "My Committee",
     "short": "MC",
     "context_template": "My Committee, Town Hall, {date}, meeting called to order at 7 PM",
-    "name_template": "My Committee Meeting \u2013 {month_year}"
+    "name_template": "My Committee Meeting \u2013 {month_year}",
+    "vocabulary": "My Committee, Town Hall, Jane Smith, relevant jargon"
   },
   "anothergroup": {
     "label": "Another Group",
     "short": "AG",
     "context_template": "Another Group, Community Center, 123 Main St, Anytown ME, {date}, meeting called to order at 6:30 PM",
-    "name_template": "Another Group Meeting \u2013 {month_year}"
+    "name_template": "Another Group Meeting \u2013 {month_year}",
+    "vocabulary": "Another Group, Anytown, John Doe, Alice Johnson"
   }
 }

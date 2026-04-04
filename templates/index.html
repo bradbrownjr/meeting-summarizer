@@ -452,6 +452,11 @@
           <input type="text" id="ed-name-tpl"
             placeholder="e.g. WOHD Committee Meeting &#8211; {month_year}" />
         </div>
+        <div class="field">
+          <label>Vocabulary <span class="hint">Names, place names, abbreviations, and jargon — one per line or comma-separated. Improves transcription accuracy.</span></label>
+          <textarea id="ed-vocab" rows="4"
+            placeholder="e.g. WOHD, Waterboro, Old Home Days, Jane Smith, John Doe"></textarea>
+        </div>
         <div class="editor-actions">
           <button class="btn btn-primary" type="button" id="save-org-btn">Save</button>
           <button class="btn btn-ghost" type="button" id="cancel-org-btn">Cancel</button>
@@ -733,6 +738,7 @@ document.getElementById("save-org-btn").addEventListener("click", async () => {
     short:            document.getElementById("ed-short").value.trim(),
     context_template: document.getElementById("ed-context").value.trim(),
     name_template:    document.getElementById("ed-name-tpl").value.trim(),
+    vocabulary:       document.getElementById("ed-vocab").value.trim(),
   };
   if (!payload.label) { alert("Name is required."); return; }
 
@@ -783,11 +789,13 @@ function openEditor(id) {
     document.getElementById("ed-short").value    = o.short            || "";
     document.getElementById("ed-context").value  = o.context_template || "";
     document.getElementById("ed-name-tpl").value = o.name_template    || "";
+    document.getElementById("ed-vocab").value    = o.vocabulary       || "";
   } else {
     document.getElementById("ed-label").value    = "";
     document.getElementById("ed-short").value    = "";
     document.getElementById("ed-context").value  = "";
     document.getElementById("ed-name-tpl").value = "Meeting \u2013 {month_year}";
+    document.getElementById("ed-vocab").value    = "";
   }
   document.getElementById("ed-label").focus();
 }
