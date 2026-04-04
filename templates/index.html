@@ -315,6 +315,52 @@
       margin-bottom: .75rem;
       color: var(--text);
     }
+    /* Import section */
+    #import-section {
+      margin-top: 1rem;
+      border-top: 1px solid var(--border);
+      padding-top: 1rem;
+    }
+    #import-section h3 {
+      font-size: .95rem; font-weight: 700;
+      color: var(--primary); margin-bottom: .75rem;
+    }
+    #import-server-box {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: .85rem 1rem;
+      margin-bottom: .75rem;
+    }
+    #import-server-box p { font-size: .85rem; color: var(--muted); margin-bottom: .6rem; }
+    #import-server-files {
+      font-size: .8rem; color: var(--muted);
+      font-family: "SF Mono", Consolas, monospace;
+      margin-bottom: .6rem;
+      display: flex; flex-wrap: wrap; gap: .35rem;
+    }
+    .file-chip {
+      background: #e8f4ee; color: var(--primary);
+      border-radius: 4px; padding: .15rem .45rem;
+    }
+    #yaml-drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 1.1rem 1rem;
+      text-align: center;
+      cursor: pointer;
+      font-size: .85rem;
+      color: var(--muted);
+      transition: border-color .2s, background .2s;
+    }
+    #yaml-drop-zone.over { border-color: var(--accent); background: #e9f5ee; }
+    #yaml-drop-zone strong { color: var(--primary); }
+    #yaml-file-input { display: none; }
+    .import-result {
+      margin-top: .6rem; font-size: .82rem; border-radius: var(--radius);
+      padding: .5rem .75rem;
+    }
+    .import-result.ok  { background: #eaf5ee; color: var(--primary); }
+    .import-result.err { background: #fdf0ed; color: var(--danger); }
+
     .editor-actions {
       display: flex;
       gap: .5rem;
@@ -357,8 +403,32 @@
     <div id="manage-panel">
       <h3>Committees</h3>
       <div id="org-list"></div>
-      <div style="margin-top:.75rem">
+      <div style="margin-top:.75rem; display:flex; gap:.5rem; flex-wrap:wrap">
         <button class="btn btn-outline" type="button" id="add-org-btn">+ Add committee</button>
+      </div>
+
+      <!-- Import section -->
+      <div id="import-section">
+        <h3>Import from YAML</h3>
+
+        <!-- Server-side import -->
+        <div id="import-server-box">
+          <p>Import all <code>.yaml</code> files from the server's templates directory:</p>
+          <div id="import-server-files"></div>
+          <button class="btn btn-outline" type="button" id="import-server-btn">
+            &#8659; Import from server
+          </button>
+          <div id="import-server-result"></div>
+        </div>
+
+        <!-- Upload a YAML file -->
+        <div id="yaml-drop-zone" role="button" tabindex="0"
+             aria-label="Click or drag a YAML file to import">
+          Drag &amp; drop a <strong>.yaml</strong> file here, or
+          <strong>click to browse</strong>
+        </div>
+        <input type="file" id="yaml-file-input" accept=".yaml,.yml" />
+        <div id="import-upload-result"></div>
       </div>
 
       <!-- Inline editor -->
@@ -489,7 +559,26 @@ async function loadOrgs() {
   renderOrgPills();
   renderOrgList();
 }
+
+async function loadTemplateFiles() {
+  try {
+    const r = await fetch("/api/orgs/templates");
+    const data = await r.json();
+    const box = document.getElementById("import-server-files");
+    if (!data.exists || data.files.length === 0) {
+      box.innerHTML = `<span style="font-style:italic">No .yaml files found in <code>${escHtml(data.dir)}</code></span>`;
+      document.getElementById("import-server-btn").disabled = true;
+    } else {
+      box.innerHTML = data.files.map(f => `<span class="file-chip">${escHtml(f)}</span>`).join("");
+      document.getElementById("import-server-btn").disabled = false;
+    }
+  } catch {
+    document.getElementById("import-server-files").textContent = "Could not reach server.";
+  }
+}
+
 loadOrgs();
+loadTemplateFiles();
 
 // ── Org pills ──────────────────────────────────────────────────────────────
 function renderOrgPills() {
@@ -524,6 +613,82 @@ function renderOrgPills() {
     });
     grid.insertBefore(pill, grid.querySelector("#manage-toggle") || null);
   });
+}
+
+// ── Import: server ────────────────────────────────────────────────────────
+document.getElementById("import-server-btn").addEventListener("click", async () => {
+  const btn = document.getElementById("import-server-btn");
+  btn.disabled = true;
+  btn.textContent = "Importing\u2026";
+  const resultEl = document.getElementById("import-server-result");
+  resultEl.innerHTML = "";
+  try {
+    const r = await fetch("/api/orgs/import/server", { method: "POST" });
+    const data = await r.json();
+    if (!r.ok) {
+      showImportResult(resultEl, false, data.error || "Import failed");
+    } else {
+      orgs = data.orgs;
+      renderOrgPills();
+      renderOrgList();
+      await loadTemplateFiles();
+      const msg = data.imported.length
+        ? `Imported: ${data.imported.join(", ")}` + (data.errors.length ? `\nWarnings: ${data.errors.join("; ")}` : "")
+        : (data.errors.length ? `Errors: ${data.errors.join("; ")}` : "Nothing imported.");
+      showImportResult(resultEl, data.imported.length > 0, msg);
+    }
+  } catch (err) {
+    showImportResult(resultEl, false, `Request failed: ${err.message}`);
+  }
+  btn.disabled = false;
+  btn.textContent = "\u2659 Import from server";
+});
+
+// ── Import: upload ────────────────────────────────────────────────────────
+const yamlDrop  = document.getElementById("yaml-drop-zone");
+const yamlInput = document.getElementById("yaml-file-input");
+
+yamlDrop.addEventListener("click",   () => yamlInput.click());
+yamlDrop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") yamlInput.click(); });
+yamlDrop.addEventListener("dragover",  e => { e.preventDefault(); yamlDrop.classList.add("over"); });
+yamlDrop.addEventListener("dragleave", () => yamlDrop.classList.remove("over"));
+yamlDrop.addEventListener("drop", e => {
+  e.preventDefault();
+  yamlDrop.classList.remove("over");
+  const f = e.dataTransfer.files[0];
+  if (f) uploadYaml(f);
+});
+yamlInput.addEventListener("change", e => {
+  if (e.target.files[0]) uploadYaml(e.target.files[0]);
+  e.target.value = "";
+});
+
+async function uploadYaml(file) {
+  const resultEl = document.getElementById("import-upload-result");
+  resultEl.innerHTML = `<div class="import-result ok">Uploading ${escHtml(file.name)}\u2026</div>`;
+  const fd = new FormData();
+  fd.append("file", file);
+  try {
+    const r = await fetch("/api/orgs/import/upload", { method: "POST", body: fd });
+    const data = await r.json();
+    if (!r.ok) {
+      showImportResult(resultEl, false, data.error || "Upload failed");
+    } else {
+      orgs = data.orgs;
+      renderOrgPills();
+      renderOrgList();
+      const msg = data.imported.length
+        ? `Imported: ${data.imported.join(", ")}` + (data.errors.length ? `\nWarnings: ${data.errors.join("; ")}` : "")
+        : (data.errors.length ? `Errors: ${data.errors.join("; ")}` : "Nothing imported.");
+      showImportResult(resultEl, data.imported.length > 0, msg);
+    }
+  } catch (err) {
+    showImportResult(resultEl, false, `Request failed: ${err.message}`);
+  }
+}
+
+function showImportResult(el, ok, msg) {
+  el.innerHTML = `<div class="import-result ${ok ? "ok" : "err"}">${escHtml(msg)}</div>`;
 }
 
 // ── Manage panel toggle ────────────────────────────────────────────────────

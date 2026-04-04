@@ -18,6 +18,7 @@ VOLUME ["/root/.cache/huggingface", "/data"]
 
 ENV UPLOAD_DIR=/tmp/meeting_uploads
 ENV DATA_DIR=/data
+ENV TEMPLATES_DIR=/templates
 ENV WEB_PORT=8082
 
 EXPOSE 8082

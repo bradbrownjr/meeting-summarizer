@@ -9,10 +9,12 @@ services:
     volumes:
       - meeting-hf-cache:/root/.cache/huggingface
       - meeting-data:/data
+      - ./templates-yaml:/templates
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - UPLOAD_DIR=/tmp/meeting_uploads
       - DATA_DIR=/data
+      - TEMPLATES_DIR=/templates
       - WEB_PORT=8082
 
 volumes:

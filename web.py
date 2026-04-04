@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import yaml
 from flask import Flask, Response, jsonify, render_template, request, send_file
 
 
@@ -23,6 +24,11 @@ from flask import Flask, Response, jsonify, render_template, request, send_file
 DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 ORGS_FILE = DATA_DIR / "orgs.json"
+
+TEMPLATES_DIR = Path(os.environ.get(
+    "TEMPLATES_DIR",
+    Path.home() / "meeting-templates",
+))
 
 
 def load_orgs() -> dict:
@@ -265,6 +271,106 @@ def api_orgs_delete(org_id: str):
     del orgs[org_id]
     save_orgs(orgs)
     return jsonify({"ok": True, "orgs": orgs})
+
+
+# ── Org import (YAML) ─────────────────────────────────────────────────────────
+
+def _parse_yaml_orgs(text: str) -> list[dict]:
+    """Parse a YAML string into a list of org dicts.
+
+    Supports two formats:
+      - A single mapping (one org per file).
+      - A list of mappings (multiple orgs in one file).
+    """
+    data = yaml.safe_load(text)
+    if isinstance(data, dict):
+        return [data]
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    return []
+
+
+def _apply_org_entries(entries: list[dict], orgs: dict) -> tuple[list, list]:
+    """Merge parsed org entries into orgs dict. Returns (imported_names, errors)."""
+    imported, errors = [], []
+    for entry in entries:
+        label = (entry.get("label") or "").strip()
+        if not label:
+            errors.append("Entry missing 'label' — skipped")
+            continue
+        org_id = (entry.get("id") or "").strip() or _make_org_id(label, orgs)
+        orgs[org_id] = {
+            "label":            label,
+            "short":            (entry.get("short") or "").strip(),
+            "context_template": (entry.get("context_template") or "").strip(),
+            "name_template":    (entry.get("name_template") or "Meeting \u2013 {month_year}").strip(),
+        }
+        imported.append(label)
+    return imported, errors
+
+
+@app.route("/api/orgs/templates", methods=["GET"])
+def api_orgs_templates():
+    """List .yaml/.yml files available in TEMPLATES_DIR."""
+    if not TEMPLATES_DIR.exists():
+        return jsonify({"dir": str(TEMPLATES_DIR), "files": [], "exists": False})
+    files = sorted(
+        p.name for p in TEMPLATES_DIR.iterdir()
+        if p.suffix.lower() in (".yaml", ".yml") and p.is_file()
+    )
+    return jsonify({"dir": str(TEMPLATES_DIR), "files": files, "exists": True})
+
+
+@app.route("/api/orgs/import/server", methods=["POST"])
+def api_orgs_import_server():
+    """Import all YAML files from TEMPLATES_DIR."""
+    if not TEMPLATES_DIR.exists():
+        return jsonify({"error": f"Templates directory not found: {TEMPLATES_DIR}"}), 404
+
+    orgs = load_orgs()
+    all_imported, all_errors = [], []
+
+    yaml_files = sorted(
+        p for p in TEMPLATES_DIR.iterdir()
+        if p.suffix.lower() in (".yaml", ".yml") and p.is_file()
+    )
+    if not yaml_files:
+        return jsonify({"error": "No .yaml files found in templates directory"}), 404
+
+    for path in yaml_files:
+        try:
+            entries = _parse_yaml_orgs(path.read_text(encoding="utf-8"))
+            imported, errors = _apply_org_entries(entries, orgs)
+            all_imported.extend(f"{path.name}: {n}" for n in imported)
+            all_errors.extend(f"{path.name}: {e}" for e in errors)
+        except Exception as exc:
+            all_errors.append(f"{path.name}: {exc}")
+
+    save_orgs(orgs)
+    return jsonify({"ok": True, "imported": all_imported, "errors": all_errors, "orgs": orgs})
+
+
+@app.route("/api/orgs/import/upload", methods=["POST"])
+def api_orgs_import_upload():
+    """Import orgs from an uploaded YAML file."""
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"error": "No file provided"}), 400
+    if Path(f.filename).suffix.lower() not in (".yaml", ".yml"):
+        return jsonify({"error": "File must be .yaml or .yml"}), 400
+
+    try:
+        entries = _parse_yaml_orgs(f.read().decode("utf-8"))
+    except Exception as exc:
+        return jsonify({"error": f"Failed to parse YAML: {exc}"}), 400
+
+    if not entries:
+        return jsonify({"error": "No valid org entries found in file"}), 400
+
+    orgs = load_orgs()
+    imported, errors = _apply_org_entries(entries, orgs)
+    save_orgs(orgs)
+    return jsonify({"ok": True, "imported": imported, "errors": errors, "orgs": orgs})
 
 
 # ── Job routes ────────────────────────────────────────────────────────────────

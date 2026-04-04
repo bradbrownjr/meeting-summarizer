@@ -36,6 +36,11 @@
       <ContainerDir>/data</ContainerDir>
       <Mode>rw</Mode>
     </Volume>
+    <Volume>
+      <HostDir>/mnt/user/appdata/meeting-summarizer/templates</HostDir>
+      <ContainerDir>/templates</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
   </Data>
 
   <Environment>
@@ -55,8 +60,12 @@
           Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/meeting-summarizer/hf-cache</Config>
 
   <Config Name="Data" Target="/data" Default="/mnt/user/appdata/meeting-summarizer/data" Mode="rw"
-          Description="Host path for committee templates (orgs.json). Add and edit committees via the web UI; this path ensures they survive container updates."
+          Description="Host path for committee configuration (orgs.json). Committees added via the web UI are stored here and survive container updates."
           Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/meeting-summarizer/data</Config>
+
+  <Config Name="Templates" Target="/templates" Default="/mnt/user/appdata/meeting-summarizer/templates" Mode="rw"
+          Description="Host path for YAML committee template files. Drop .yaml files here and use the Import button in the web UI to load them."
+          Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/meeting-summarizer/templates</Config>
 
   <Config Name="Anthropic API Key" Target="ANTHROPIC_API_KEY" Default="" Mode=""
           Description="Your Anthropic API key for Claude-based minute generation. Leave blank to use Ollama instead."
