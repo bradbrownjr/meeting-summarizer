@@ -57,7 +57,7 @@ CONFIG_PATH = Path(__file__).parent / "config.json"
 
 SPEACHES_URL  = os.getenv("SPEACHES_URL", "http://localhost:8000")
 OLLAMA_URL    = os.getenv("OLLAMA_URL",   "http://localhost:11434")
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "Systran/faster-whisper-large-v3")
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "Systran/faster-distil-whisper-large-v3")
 CLAUDE_MODEL  = os.getenv("CLAUDE_MODEL",  "claude-sonnet-4-6")
 OLLAMA_MODEL  = os.getenv("OLLAMA_MODEL",  "gemma4:e4b")
 
@@ -496,6 +496,10 @@ def main():
     parser.add_argument("--ollama-model", default="",
                         help=f"Ollama model to use (default: {OLLAMA_MODEL}). "
                              "Only used with --backend ollama")
+    parser.add_argument("--whisper-model", default=None,
+                        help=f"Whisper model for Speaches transcription "
+                             f"(default: {WHISPER_MODEL}). "
+                             "e.g. Systran/faster-whisper-large-v3")
     parser.add_argument("--speaches-url", default=None,
                         help=f"Speaches server URL (default: {SPEACHES_URL})")
     parser.add_argument("--yes", "-y", action="store_true",
@@ -518,6 +522,13 @@ def main():
         return answer or default
 
     # ── Interactive prompts for missing arguments ────────────────────────────
+
+    # Whisper model
+    global WHISPER_MODEL
+    if args.whisper_model:
+        WHISPER_MODEL = args.whisper_model
+    elif not os.getenv("WHISPER_MODEL"):
+        WHISPER_MODEL = cfg.get("whisper_model", WHISPER_MODEL)
 
     # Speaches URL
     global SPEACHES_URL
