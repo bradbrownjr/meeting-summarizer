@@ -1,0 +1,343 @@
+"""Meeting Summarizer — Web UI.
+
+Run:
+    python web.py [--port 8082] [--host 0.0.0.0]
+"""
+
+import json
+import os
+import re
+import shutil
+import tempfile
+import threading
+import time
+import uuid
+from datetime import datetime
+from pathlib import Path
+
+from flask import Flask, Response, jsonify, render_template, request, send_file
+
+
+# ── Org profiles ─────────────────────────────────────────────────────────────
+
+ORGS = {
+    "wohd": {
+        "label": "Waterboro Old Home Days",
+        "short": "WOHD",
+        "context_template": (
+            "Waterboro Old Home Days Committee, Waterboro Town Hall, "
+            "{date}, meeting called to order at 6 PM"
+        ),
+        "name_template": "WOHD Committee Meeting \u2013 {month_year}",
+    },
+    "wssm": {
+        "label": "Wireless Society of Southern Maine",
+        "short": "WSSM",
+        "context_template": (
+            "Wireless Society of Southern Maine, South Windham Fire Station, "
+            "33 Main Street, Windham ME, {date}, meeting called to order at 7 PM"
+        ),
+        "name_template": "WSSM General Meeting \u2013 {month_year}",
+    },
+    "ect": {
+        "label": "WSSM Emergency Comm. Team / ARES",
+        "short": "ECT",
+        "context_template": (
+            "WSSM Emergency Communications Team / Cumberland County ARES, "
+            "CCEMA, 22 High Street, Windham ME, {date}, meeting called to order at 7 PM"
+        ),
+        "name_template": "WSSM-ECT Meeting \u2013 {month_year}",
+    },
+}
+
+
+# ── Flask app ─────────────────────────────────────────────────────────────────
+
+_template_dir = os.path.join(os.path.dirname(__file__), "templates")
+app = Flask(__name__, template_folder=_template_dir)
+app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024  # 500 MB
+
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", tempfile.gettempdir())) / "meeting_uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ── Job state ─────────────────────────────────────────────────────────────────
+
+import queue as _queue
+
+_jobs: dict = {}
+_jobs_lock = threading.Lock()
+
+
+def _new_job() -> str:
+    job_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "status": "queued",
+            "logs": [],
+            "result_md": None,
+            "transcript": None,
+            "meeting_name": "",
+            "error": None,
+            "q": _queue.Queue(maxsize=500),
+            "created_at": time.time(),
+        }
+    return job_id
+
+
+def _push(job_id: str, event: dict):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        return
+    etype = event.get("type")
+    if etype == "log":
+        job["logs"].append(event.get("data", {}).get("message", ""))
+    elif etype == "status":
+        job["status"] = event.get("data", {}).get("status", job["status"])
+    elif etype == "result":
+        job["result_md"] = event["data"].get("minutes", "")
+        job["transcript"] = event["data"].get("transcript", "")
+        job["status"] = "done"
+    elif etype == "error":
+        job["error"] = event["data"].get("message", "Unknown error")
+        job["status"] = "error"
+    try:
+        job["q"].put_nowait(event)
+    except _queue.Full:
+        pass
+
+
+def _emit(job_id: str, event_type: str, **data):
+    _push(job_id, {"type": event_type, "data": data})
+
+
+# ── Job runner ────────────────────────────────────────────────────────────────
+
+def _run_job(job_id: str, audio_path: Path, org_id: str,
+             date_str: str, names: str, backend: str, ollama_model: str):
+    from summarize_meeting import (
+        transcribe, build_clean_transcript, generate_minutes,
+        unload_whisper_model, unload_ollama_model,
+        WHISPER_MODEL, OLLAMA_MODEL,
+    )
+
+    def emit_cb(event_type, **data):
+        _emit(job_id, event_type, **data)
+
+    def log(msg: str, level: str = "info"):
+        print(f"  [{job_id[:8]}] {msg}")
+        _emit(job_id, "log", message=msg, level=level)
+
+    cleanup: list = []
+
+    try:
+        _emit(job_id, "status", status="transcribing")
+
+        org = ORGS.get(org_id, {})
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            month_year = dt.strftime("%B %Y")
+            formatted_date = dt.strftime("%B %d, %Y")
+        except ValueError:
+            month_year = date_str
+            formatted_date = date_str
+
+        context = org.get("context_template", "").format(date=formatted_date)
+        meeting_name = org.get("name_template", "Meeting \u2013 {month_year}").format(
+            month_year=month_year
+        )
+        with _jobs_lock:
+            _jobs[job_id]["meeting_name"] = meeting_name
+
+        log(f"Starting: {meeting_name}")
+        log(f"Audio: {audio_path.name}  ({audio_path.stat().st_size // 1024:,} KB)")
+        log(f"Whisper model: {WHISPER_MODEL}")
+
+        result = transcribe(audio_path, cleanup, hotwords=names,
+                            emit_callback=emit_cb)
+        transcript = build_clean_transcript(audio_path, result, cleanup,
+                                            hotwords=names,
+                                            emit_callback=emit_cb)
+
+        word_count = len(transcript.split())
+        log(f"Transcript complete \u2014 {word_count:,} words")
+
+        if backend == "transcript_only":
+            _emit(job_id, "result", minutes="", transcript=transcript)
+            log("Done (transcript only).")
+            return
+
+        _emit(job_id, "status", status="generating")
+        log(f"Generating minutes (backend: {backend})\u2026")
+
+        minutes = generate_minutes(
+            transcript,
+            names=names,
+            context=context,
+            backend=backend,
+            ollama_model=ollama_model or OLLAMA_MODEL,
+            emit_callback=emit_cb,
+        )
+        _emit(job_id, "result", minutes=minutes, transcript=transcript)
+        log("Done.")
+
+    except Exception as exc:
+        log(f"Error: {exc}", level="error")
+        _emit(job_id, "error", message=str(exc))
+
+    finally:
+        try:
+            unload_whisper_model(WHISPER_MODEL)
+        except Exception:
+            pass
+        if backend == "ollama":
+            try:
+                unload_ollama_model(ollama_model or OLLAMA_MODEL)
+            except Exception:
+                pass
+        for p in cleanup:
+            if p.exists():
+                p.unlink()
+        # Signal SSE stream to close
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+        if job:
+            try:
+                job["q"].put_nowait({"type": "eof", "data": {}})
+            except _queue.Full:
+                pass
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.route("/")
+def index():
+    return render_template("index.html", orgs=ORGS)
+
+
+@app.route("/api/run", methods=["POST"])
+def api_run():
+    audio = request.files.get("audio")
+    if not audio or not audio.filename:
+        return jsonify({"ok": False, "error": "No audio file provided"}), 400
+
+    org_id      = request.form.get("org", "")
+    date_str    = request.form.get("date", datetime.today().strftime("%Y-%m-%d"))
+    names       = request.form.get("names", "")
+    backend     = request.form.get("backend", "claude-api")
+    ollama_model = request.form.get("ollama_model", "")
+
+    job_id = _new_job()
+    dest = UPLOAD_DIR / job_id / Path(audio.filename).name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    audio.save(dest)
+
+    threading.Thread(
+        target=_run_job,
+        args=(job_id, dest, org_id, date_str, names, backend, ollama_model),
+        daemon=True,
+    ).start()
+
+    return jsonify({"ok": True, "job_id": job_id})
+
+
+@app.route("/api/jobs/<job_id>/stream")
+def api_stream(job_id: str):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Not found"}), 404
+
+    q = job["q"]
+
+    def generate():
+        while True:
+            try:
+                event = q.get(timeout=30)
+            except _queue.Empty:
+                yield "event: ping\ndata: {}\n\n"
+                continue
+            yield f"data: {json.dumps(event)}\n\n"
+            if event.get("type") in ("eof", "error"):
+                break
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.route("/api/jobs/<job_id>")
+def api_job(job_id: str):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify({
+        "status":       job["status"],
+        "meeting_name": job["meeting_name"],
+        "result_md":    job["result_md"],
+        "transcript":   job["transcript"],
+        "error":        job["error"],
+    })
+
+
+@app.route("/api/jobs/<job_id>/download")
+def api_download(job_id: str):
+    filetype = request.args.get("type", "minutes")
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Not found"}), 404
+
+    content = job["result_md"] if filetype == "minutes" else job["transcript"]
+    if not content:
+        return jsonify({"error": "Not available yet"}), 404
+
+    stem = re.sub(r"[^\w\s-]", "", job.get("meeting_name", "meeting")).strip()
+    stem = stem.replace(" ", "_") or "meeting"
+    ext  = "md" if filetype == "minutes" else "txt"
+    fname = f"{stem}_{'minutes' if filetype == 'minutes' else 'transcript'}.{ext}"
+
+    tmp = Path(tempfile.mktemp(suffix=f"_{fname}"))
+    tmp.write_text(content, encoding="utf-8")
+    return send_file(tmp, as_attachment=True, download_name=fname)
+
+
+# ── Stale job cleanup ─────────────────────────────────────────────────────────
+
+def _cleanup_loop():
+    while True:
+        time.sleep(3600)
+        cutoff = time.time() - 86400
+        with _jobs_lock:
+            stale = [jid for jid, j in _jobs.items() if j["created_at"] < cutoff]
+        for jid in stale:
+            shutil.rmtree(UPLOAD_DIR / jid, ignore_errors=True)
+            with _jobs_lock:
+                _jobs.pop(jid, None)
+
+
+threading.Thread(target=_cleanup_loop, daemon=True).start()
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def run_server(host: str = "0.0.0.0", port: int = 8082):
+    print(f"\n{'=' * 50}")
+    print(f"  Meeting Summarizer  \u2014  Web UI")
+    print(f"  http://{host}:{port}")
+    print(f"{'=' * 50}\n")
+    app.run(host=host, port=port, threaded=True, debug=False)
+
+
+if __name__ == "__main__":
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--host", default="0.0.0.0")
+    p.add_argument("--port", type=int,
+                   default=int(os.environ.get("WEB_PORT", 8082)))
+    args = p.parse_args()
+    run_server(host=args.host, port=args.port)

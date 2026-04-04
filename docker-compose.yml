@@ -1,0 +1,17 @@
+services:
+  meeting-summarizer:
+    build: .
+    image: ghcr.io/bradbrownjr/meeting-summarizer:latest
+    container_name: meeting-summarizer
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    volumes:
+      - meeting-hf-cache:/root/.cache/huggingface
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - UPLOAD_DIR=/tmp/meeting_uploads
+      - WEB_PORT=8082
+
+volumes:
+  meeting-hf-cache:

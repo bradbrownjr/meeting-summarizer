@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>meeting-summarizer</Name>
+  <Repository>ghcr.io/bradbrownjr/meeting-summarizer:latest</Repository>
+  <Registry>https://ghcr.io/bradbrownjr/meeting-summarizer</Registry>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/bradbrownjr/meeting-summarizer</Support>
+  <Project>https://github.com/bradbrownjr/meeting-summarizer</Project>
+  <Overview>Web UI for transcribing meeting recordings and generating polished meeting minutes using Whisper + Claude or Ollama. Upload an audio file, pick your committee, and get minutes in seconds.</Overview>
+  <Category>MediaApp:Other Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8082]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/bradbrownjr/meeting-summarizer/main/docs/icon.png</Icon>
+  <ExtraParams>--restart=unless-stopped</ExtraParams>
+  <Description>Meeting Summarizer — transcribes audio recordings with distil-Whisper and generates structured meeting minutes via Claude API or a local Ollama model. Pre-configured for WOHD, WSSM, and ECT committee meetings.</Description>
+
+  <Networking>
+    <Mode>bridge</Mode>
+    <Publish>
+      <Port>
+        <HostPort>8082</HostPort>
+        <ContainerPort>8082</ContainerPort>
+        <Protocol>tcp</Protocol>
+      </Port>
+    </Publish>
+  </Networking>
+
+  <Data>
+    <Volume>
+      <HostDir>/mnt/user/appdata/meeting-summarizer/hf-cache</HostDir>
+      <ContainerDir>/root/.cache/huggingface</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+  </Data>
+
+  <Environment>
+    <Variable>
+      <Value></Value>
+      <Name>ANTHROPIC_API_KEY</Name>
+      <Mode/>
+    </Variable>
+  </Environment>
+
+  <Config Name="Web UI Port" Target="8082" Default="8082" Mode="tcp"
+          Description="Port for the Meeting Summarizer web interface."
+          Type="Port" Display="always" Required="true" Mask="false">8082</Config>
+
+  <Config Name="HuggingFace Cache" Target="/root/.cache/huggingface" Default="/mnt/user/appdata/meeting-summarizer/hf-cache" Mode="rw"
+          Description="Host path for Whisper model cache. Persists downloaded models across container restarts."
+          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/meeting-summarizer/hf-cache</Config>
+
+  <Config Name="Anthropic API Key" Target="ANTHROPIC_API_KEY" Default="" Mode=""
+          Description="Your Anthropic API key for Claude-based minute generation. Leave blank to use Ollama instead."
+          Type="Variable" Display="always" Required="false" Mask="true"></Config>
+</Container>

@@ -197,10 +197,19 @@ def unload_ollama_model(model: str) -> None:
 
 
 def transcribe(audio_path: Path, cleanup: list,
-               prompt: str = "", hotwords: str = "") -> dict:
+               prompt: str = "", hotwords: str = "",
+               emit_callback=None) -> dict:
     """Send audio to Speaches and return the verbose_json dict."""
+    def _log(msg):
+        print(f"  {msg}")
+        if emit_callback:
+            try:
+                emit_callback("log", message=msg, level="info")
+            except Exception:
+                pass
+
     size_kb = audio_path.stat().st_size // 1024
-    print(f"  Sending {audio_path.name} ({size_kb:,} KB) to Speaches ...")
+    _log(f"Sending {audio_path.name} ({size_kb:,} KB) to Speaches ({WHISPER_MODEL})...")
 
     data = {
         "model":           WHISPER_MODEL,
@@ -222,15 +231,15 @@ def transcribe(audio_path: Path, cleanup: list,
 
     if resp.status_code == 404 and "not installed" in resp.text.lower():
         ensure_model_downloaded(WHISPER_MODEL)
-        return transcribe(audio_path, cleanup, prompt, hotwords)
+        return transcribe(audio_path, cleanup, prompt, hotwords, emit_callback)
 
     if resp.status_code == 500 and audio_path.suffix.lower() != ".mp3":
-        print("  Server error — retrying with MP3 conversion ...")
+        _log("Server error — retrying with MP3 conversion ...")
         return transcribe(convert_to_mp3(audio_path, cleanup), cleanup,
-                          prompt, hotwords)
+                          prompt, hotwords, emit_callback)
 
     if resp.status_code != 200:
-        sys.exit(f"Transcription failed ({resp.status_code}):\n{resp.text}")
+        raise RuntimeError(f"Transcription failed ({resp.status_code}):\n{resp.text}")
 
     return resp.json()
 
@@ -304,22 +313,31 @@ def _anchor_text(segments: list, before_time: float) -> str:
 # ── Clean transcript assembly ───────────────────────────────────────────────────
 
 def build_clean_transcript(audio_path: Path, result: dict,
-                            cleanup: list, hotwords: str = "") -> str:
+                            cleanup: list, hotwords: str = "",
+                            emit_callback=None) -> str:
     """
     Detect hallucinated ranges, retry them with anchor prompts, and return
     a single clean transcript string.
     """
+    def _log(msg):
+        print(f"  {msg}")
+        if emit_callback:
+            try:
+                emit_callback("log", message=msg, level="info")
+            except Exception:
+                pass
+
     segments   = result.get("segments", [])
     bad_ranges = find_hallucinated_ranges(segments)
 
     if not bad_ranges:
-        print("  No hallucinations detected.")
+        _log("No hallucinations detected.")
         return " ".join(s.get("text", "").strip() for s in segments)
 
-    print(f"  Detected {len(bad_ranges)} hallucinated range(s):")
+    _log(f"Detected {len(bad_ranges)} hallucinated range(s) — retrying...")
     for s, e in bad_ranges:
-        print(f"    {int(s)//60:02d}:{int(s)%60:02d} → "
-              f"{int(e)//60:02d}:{int(e)%60:02d}")
+        _log(f"  Bad range: {int(s)//60:02d}:{int(s)%60:02d} → "
+             f"{int(e)//60:02d}:{int(e)%60:02d}")
 
     # Start with all clean segments
     clean = [s for s in segments
@@ -329,8 +347,7 @@ def build_clean_transcript(audio_path: Path, result: dict,
         anchor         = _anchor_text(segments, bad_start)
         retry_from     = max(0.0, bad_start - RETRY_OVERLAP_SECONDS)
         anchor_preview = anchor[-80:].replace("\n", " ")
-        print(f"  Retrying from {retry_from/60:.1f} min  "
-              f"(anchor: \"{anchor_preview}\")")
+        _log(f"Retrying from {retry_from/60:.1f} min (anchor: \"{anchor_preview}\")")
 
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
             tmp_path = Path(tmp.name)
@@ -338,7 +355,8 @@ def build_clean_transcript(audio_path: Path, result: dict,
         try:
             extract_from(audio_path, retry_from, tmp_path)
             retry_result = transcribe(tmp_path, cleanup, prompt=anchor,
-                                      hotwords=hotwords)
+                                      hotwords=hotwords,
+                                      emit_callback=emit_callback)
             retry_segs   = retry_result.get("segments", [])
 
             # Shift timestamps back to the original timeline
@@ -371,8 +389,14 @@ def _build_user_content(transcript: str, names: str, context: str) -> str:
     return "\n\n".join(parts)
 
 
-def generate_minutes_claude_api(transcript: str, names: str, context: str) -> str:
+def generate_minutes_claude_api(transcript: str, names: str, context: str,
+                                emit_callback=None) -> str:
     """Generate minutes using the Anthropic API (requires ANTHROPIC_API_KEY)."""
+    if emit_callback:
+        try:
+            emit_callback("log", message=f"Sending transcript to Claude API ({CLAUDE_MODEL})...", level="info")
+        except Exception:
+            pass
     client = anthropic.Anthropic()
     user_content = _build_user_content(transcript, names, context)
     print(f"  Sending transcript to Claude API ({CLAUDE_MODEL}) ...")
@@ -386,8 +410,13 @@ def generate_minutes_claude_api(transcript: str, names: str, context: str) -> st
 
 
 def generate_minutes_ollama(transcript: str, names: str, context: str,
-                            model: str) -> str:
+                            model: str, emit_callback=None) -> str:
     """Generate minutes using a local Ollama model."""
+    if emit_callback:
+        try:
+            emit_callback("log", message=f"Sending transcript to Ollama ({model})...", level="info")
+        except Exception:
+            pass
     user_content = _build_user_content(transcript, names, context)
     print(f"  Sending transcript to Ollama ({model}) ...")
     resp = requests.post(
@@ -403,7 +432,7 @@ def generate_minutes_ollama(transcript: str, names: str, context: str,
         timeout=3600,
     )
     if resp.status_code != 200:
-        sys.exit(f"Ollama request failed ({resp.status_code}):\n{resp.text}")
+        raise RuntimeError(f"Ollama request failed ({resp.status_code}):\n{resp.text}")
     return resp.json()["message"]["content"]
 
 
@@ -422,22 +451,25 @@ def generate_minutes_claude_cli(transcript: str, names: str,
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        sys.exit(f"claude CLI error:\n{result.stderr}")
+        raise RuntimeError(f"claude CLI error:\n{result.stderr}")
     return result.stdout
 
 
 def generate_minutes(transcript: str, names: str = "", context: str = "",
                      backend: str = "claude-api",
-                     ollama_model: str = "") -> str:
+                     ollama_model: str = "",
+                     emit_callback=None) -> str:
     if backend == "claude-api":
-        return generate_minutes_claude_api(transcript, names, context)
+        return generate_minutes_claude_api(transcript, names, context,
+                                           emit_callback=emit_callback)
     elif backend == "ollama":
         return generate_minutes_ollama(transcript, names, context,
-                                       ollama_model or OLLAMA_MODEL)
+                                       ollama_model or OLLAMA_MODEL,
+                                       emit_callback=emit_callback)
     elif backend == "claude-cli":
         return generate_minutes_claude_cli(transcript, names, context)
     else:
-        sys.exit(f"Unknown backend: {backend}")
+        raise RuntimeError(f"Unknown backend: {backend}")
 
 
 # ── Config file ─────────────────────────────────────────────────────────────────

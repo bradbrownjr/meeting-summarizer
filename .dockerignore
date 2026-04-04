@@ -1,0 +1,9 @@
+.git
+__pycache__
+*.pyc
+*.pyo
+.env
+.env.*
+*.md
+docs/
+research-*.md

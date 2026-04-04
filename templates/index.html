@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Meeting Summarizer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #f5f5f0;
+      --surface:   #ffffff;
+      --border:    #ddd;
+      --primary:   #2c6e49;
+      --primary-h: #245a3c;
+      --accent:    #52b788;
+      --danger:    #c0392b;
+      --text:      #1a1a1a;
+      --muted:     #666;
+      --radius:    8px;
+      --shadow:    0 2px 8px rgba(0,0,0,.10);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 1rem;
+    }
+
+    header {
+      text-align: center;
+      padding: 1.5rem 1rem 1rem;
+      margin-bottom: 1.5rem;
+    }
+    header h1 { font-size: 1.75rem; color: var(--primary); }
+    header p  { color: var(--muted); margin-top: .35rem; font-size: .95rem; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 1.5rem;
+      margin-bottom: 1.25rem;
+      max-width: 720px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .card h2 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      gap: .4rem;
+    }
+
+    /* Org pills */
+    .org-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .6rem;
+    }
+    .org-pill {
+      cursor: pointer;
+      border: 2px solid var(--border);
+      border-radius: 100px;
+      padding: .45rem 1.1rem;
+      font-size: .9rem;
+      background: var(--bg);
+      transition: border-color .15s, background .15s, color .15s;
+      user-select: none;
+    }
+    .org-pill:hover { border-color: var(--accent); }
+    .org-pill.selected {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: #fff;
+      font-weight: 600;
+    }
+
+    /* Form rows */
+    .field { margin-bottom: 1rem; }
+    .field label {
+      display: block;
+      font-size: .85rem;
+      font-weight: 600;
+      margin-bottom: .35rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .field input[type=date],
+    .field input[type=text],
+    .field select {
+      width: 100%;
+      padding: .55rem .75rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: .95rem;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .field input:focus, .field select:focus {
+      outline: 2px solid var(--primary);
+      outline-offset: 1px;
+    }
+
+    /* Advanced toggle */
+    details summary {
+      cursor: pointer;
+      font-size: .85rem;
+      color: var(--muted);
+      margin-bottom: .75rem;
+    }
+    details[open] summary { margin-bottom: 1rem; }
+
+    /* Drop zone */
+    #drop-zone {
+      border: 2.5px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 2rem 1rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      background: var(--bg);
+    }
+    #drop-zone.over { border-color: var(--accent); background: #e9f5ee; }
+    #drop-zone.has-file { border-color: var(--primary); background: #eaf5ee; }
+    #drop-zone p { color: var(--muted); font-size: .95rem; }
+    #drop-zone .drop-icon { font-size: 2rem; margin-bottom: .5rem; }
+    #file-name {
+      margin-top: .5rem;
+      font-size: .9rem;
+      color: var(--primary);
+      font-weight: 600;
+    }
+    #file-input { display: none; }
+
+    /* Submit */
+    #submit-btn {
+      width: 100%;
+      padding: .75rem;
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .15s;
+      max-width: 720px;
+      display: block;
+      margin: 0 auto;
+    }
+    #submit-btn:hover:not(:disabled) { background: var(--primary-h); }
+    #submit-btn:disabled { opacity: .55; cursor: not-allowed; }
+
+    /* Progress */
+    #progress-section { display: none; }
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: .75rem;
+      margin-bottom: .75rem;
+    }
+    .spinner {
+      width: 20px; height: 20px;
+      border: 3px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #status-text { font-weight: 600; }
+
+    #log-box {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      border-radius: var(--radius);
+      padding: .75rem 1rem;
+      font-family: "SF Mono", Consolas, monospace;
+      font-size: .8rem;
+      line-height: 1.6;
+      max-height: 240px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    #log-box .log-error { color: #f48771; }
+
+    /* Results */
+    #result-section { display: none; }
+
+    .tab-bar {
+      display: flex;
+      gap: .5rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+    .tab-btn {
+      padding: .45rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      background: var(--bg);
+      cursor: pointer;
+      font-size: .9rem;
+      transition: background .15s, border-color .15s;
+    }
+    .tab-btn.active {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+      font-weight: 600;
+    }
+
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+
+    .result-text {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+      font-size: .9rem;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 520px;
+      overflow-y: auto;
+    }
+
+    .dl-row {
+      display: flex;
+      gap: .75rem;
+      margin-top: 1rem;
+      flex-wrap: wrap;
+    }
+    .dl-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: .4rem;
+      padding: .5rem 1.1rem;
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      font-size: .9rem;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background .15s;
+    }
+    .dl-btn:hover { background: var(--primary-h); }
+    .dl-btn.secondary {
+      background: var(--bg);
+      color: var(--primary);
+      border: 1px solid var(--primary);
+    }
+    .dl-btn.secondary:hover { background: #e9f5ee; }
+
+    /* Error banner */
+    #error-banner {
+      display: none;
+      background: #fdf0ed;
+      border: 1px solid var(--danger);
+      border-radius: var(--radius);
+      padding: .9rem 1.1rem;
+      color: var(--danger);
+      font-size: .9rem;
+      max-width: 720px;
+      margin: 0 auto 1.25rem;
+    }
+
+    /* Reset */
+    #reset-btn {
+      display: block;
+      margin: .75rem auto 0;
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: .9rem;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    @media (max-width: 480px) {
+      .card { padding: 1.1rem; }
+      header h1 { font-size: 1.4rem; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Meeting Summarizer</h1>
+  <p>Upload a recording and get polished meeting minutes automatically.</p>
+</header>
+
+<div id="error-banner"></div>
+
+<!-- Form card -->
+<div id="form-section">
+  <div class="card">
+    <h2>&#128197; Meeting Details</h2>
+
+    <!-- Org selector -->
+    <div class="field">
+      <label>Committee / Organization</label>
+      <div class="org-grid" id="org-grid">
+        {% for key, org in orgs.items() %}
+        <div class="org-pill{% if loop.first %} selected{% endif %}"
+             data-org="{{ key }}">{{ org.label }}</div>
+        {% endfor %}
+      </div>
+      <input type="hidden" id="org-input" value="{{ orgs.keys()|list|first }}" />
+    </div>
+
+    <!-- Date -->
+    <div class="field">
+      <label>Meeting Date</label>
+      <input type="date" id="date-input" />
+    </div>
+
+    <!-- Names -->
+    <div class="field">
+      <label>Attendee Names <span style="font-weight:400;text-transform:none">(optional — improves transcription)</span></label>
+      <input type="text" id="names-input"
+             placeholder="e.g. Amy, Brad, John Smith" />
+    </div>
+
+    <!-- Advanced -->
+    <details>
+      <summary>Advanced options</summary>
+
+      <div class="field">
+        <label>Minutes Backend</label>
+        <select id="backend-input">
+          <option value="claude-api">Claude API (recommended)</option>
+          <option value="ollama">Ollama (local LLM)</option>
+          <option value="transcript_only">Transcript only (no summary)</option>
+        </select>
+      </div>
+
+      <div class="field" id="ollama-model-field" style="display:none">
+        <label>Ollama Model</label>
+        <input type="text" id="ollama-model-input" placeholder="gemma4:e4b" />
+      </div>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>&#127897; Audio File</h2>
+    <div id="drop-zone" role="button" tabindex="0"
+         aria-label="Click or drag an audio file here">
+      <div class="drop-icon">&#127897;</div>
+      <p>Drag &amp; drop your audio file here, or <strong>click to browse</strong></p>
+      <p style="font-size:.8rem;margin-top:.4rem">MP3, M4A, WAV, OGG, FLAC &mdash; up to 500 MB</p>
+      <div id="file-name"></div>
+    </div>
+    <input type="file" id="file-input"
+           accept=".mp3,.m4a,.wav,.ogg,.flac,.aac,.wma,.opus" />
+  </div>
+
+  <button id="submit-btn" disabled>Generate Minutes</button>
+</div>
+
+<!-- Progress card -->
+<div id="progress-section">
+  <div class="card">
+    <h2>&#9881; Processing</h2>
+    <div class="status-bar">
+      <div class="spinner" id="spinner"></div>
+      <span id="status-text">Starting&hellip;</span>
+    </div>
+    <div id="log-box"></div>
+  </div>
+</div>
+
+<!-- Results -->
+<div id="result-section">
+  <div class="card">
+    <h2 id="result-title">&#9989; Results</h2>
+
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="minutes">Minutes</button>
+      <button class="tab-btn" data-tab="transcript">Transcript</button>
+    </div>
+
+    <div id="tab-minutes" class="tab-pane active">
+      <div class="result-text" id="minutes-text"></div>
+      <div class="dl-row">
+        <a id="dl-minutes" class="dl-btn" href="#" download>&#8595; Download Minutes (.md)</a>
+      </div>
+    </div>
+
+    <div id="tab-transcript" class="tab-pane">
+      <div class="result-text" id="transcript-text"></div>
+      <div class="dl-row">
+        <a id="dl-transcript" class="dl-btn secondary" href="#" download>&#8595; Download Transcript (.txt)</a>
+      </div>
+    </div>
+
+    <button id="reset-btn">Start a new meeting</button>
+  </div>
+</div>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let selectedOrg  = document.getElementById("org-input").value;
+  let selectedFile = null;
+  let currentJobId = null;
+
+  // ── Today's date default ───────────────────────────────────────────────────
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById("date-input").value = today;
+
+  // ── Org pills ──────────────────────────────────────────────────────────────
+  document.querySelectorAll(".org-pill").forEach(pill => {
+    pill.addEventListener("click", () => {
+      document.querySelectorAll(".org-pill").forEach(p => p.classList.remove("selected"));
+      pill.classList.add("selected");
+      selectedOrg = pill.dataset.org;
+      document.getElementById("org-input").value = selectedOrg;
+    });
+  });
+
+  // ── Backend toggle ─────────────────────────────────────────────────────────
+  document.getElementById("backend-input").addEventListener("change", e => {
+    document.getElementById("ollama-model-field").style.display =
+      e.target.value === "ollama" ? "block" : "none";
+  });
+
+  // ── Drop zone ──────────────────────────────────────────────────────────────
+  const dropZone  = document.getElementById("drop-zone");
+  const fileInput = document.getElementById("file-input");
+  const fileLabel = document.getElementById("file-name");
+  const submitBtn = document.getElementById("submit-btn");
+
+  function setFile(file) {
+    selectedFile = file;
+    fileLabel.textContent = `\u2714 ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`;
+    dropZone.classList.add("has-file");
+    submitBtn.disabled = false;
+  }
+
+  dropZone.addEventListener("click",    () => fileInput.click());
+  dropZone.addEventListener("keydown",  e => { if (e.key === "Enter" || e.key === " ") fileInput.click(); });
+  fileInput.addEventListener("change",  e => { if (e.target.files[0]) setFile(e.target.files[0]); });
+
+  dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.classList.add("over"); });
+  dropZone.addEventListener("dragleave", e => { dropZone.classList.remove("over"); });
+  dropZone.addEventListener("drop", e => {
+    e.preventDefault();
+    dropZone.classList.remove("over");
+    const f = e.dataTransfer.files[0];
+    if (f) setFile(f);
+  });
+
+  // ── Submit ─────────────────────────────────────────────────────────────────
+  submitBtn.addEventListener("click", async () => {
+    if (!selectedFile) return;
+    showError("");
+
+    const fd = new FormData();
+    fd.append("audio",        selectedFile);
+    fd.append("org",          selectedOrg);
+    fd.append("date",         document.getElementById("date-input").value);
+    fd.append("names",        document.getElementById("names-input").value.trim());
+    fd.append("backend",      document.getElementById("backend-input").value);
+    fd.append("ollama_model", document.getElementById("ollama-model-input").value.trim());
+
+    document.getElementById("form-section").style.display     = "none";
+    document.getElementById("progress-section").style.display = "block";
+    setStatus("Uploading…");
+
+    let resp;
+    try {
+      resp = await fetch("/api/run", { method: "POST", body: fd });
+    } catch (err) {
+      showFormError(`Upload failed: ${err.message}`);
+      return;
+    }
+    const json = await resp.json();
+    if (!json.ok) { showFormError(json.error || "Server error"); return; }
+
+    currentJobId = json.job_id;
+    listenSSE(currentJobId);
+  });
+
+  // ── SSE ────────────────────────────────────────────────────────────────────
+  function listenSSE(jobId) {
+    const es = new EventSource(`/api/jobs/${jobId}/stream`);
+
+    es.onmessage = e => {
+      let evt;
+      try { evt = JSON.parse(e.data); } catch { return; }
+
+      if (evt.type === "log") {
+        appendLog(evt.data.message || "", evt.data.level);
+
+      } else if (evt.type === "status") {
+        const s = evt.data.status;
+        if (s === "transcribing") setStatus("Transcribing audio…");
+        else if (s === "generating") setStatus("Generating minutes…");
+
+      } else if (evt.type === "result") {
+        es.close();
+        showResults(jobId, evt.data.minutes, evt.data.transcript);
+
+      } else if (evt.type === "error") {
+        es.close();
+        showFormError(evt.data.message || "An error occurred.");
+
+      } else if (evt.type === "eof") {
+        es.close();
+      }
+    };
+
+    es.onerror = () => {
+      // SSE closed — poll once for final state
+      es.close();
+      fetch(`/api/jobs/${jobId}`)
+        .then(r => r.json())
+        .then(j => {
+          if (j.status === "done")   showResults(jobId, j.result_md, j.transcript);
+          else if (j.status === "error") showFormError(j.error || "Unknown error");
+        });
+    };
+  }
+
+  // ── Log ────────────────────────────────────────────────────────────────────
+  const logBox = document.getElementById("log-box");
+  function appendLog(msg, level) {
+    const line = document.createElement("div");
+    if (level === "error") line.className = "log-error";
+    line.textContent = msg;
+    logBox.appendChild(line);
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+  function setStatus(msg) {
+    document.getElementById("status-text").textContent = msg;
+  }
+
+  // ── Results ────────────────────────────────────────────────────────────────
+  function showResults(jobId, minutes, transcript) {
+    document.getElementById("progress-section").style.display = "none";
+    document.getElementById("result-section").style.display   = "block";
+
+    document.getElementById("minutes-text").textContent    = minutes    || "(no minutes generated)";
+    document.getElementById("transcript-text").textContent = transcript || "(no transcript available)";
+
+    // Switch to transcript tab if minutes empty
+    if (!minutes && transcript) activateTab("transcript");
+
+    // Download links via API (avoids huge data URIs)
+    document.getElementById("dl-minutes").href    = `/api/jobs/${jobId}/download?type=minutes`;
+    document.getElementById("dl-transcript").href = `/api/jobs/${jobId}/download?type=transcript`;
+  }
+
+  // ── Tabs ───────────────────────────────────────────────────────────────────
+  document.querySelectorAll(".tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => activateTab(btn.dataset.tab));
+  });
+  function activateTab(name) {
+    document.querySelectorAll(".tab-btn").forEach(b =>
+      b.classList.toggle("active", b.dataset.tab === name));
+    document.querySelectorAll(".tab-pane").forEach(p =>
+      p.classList.toggle("active", p.id === `tab-${name}`));
+  }
+
+  // ── Reset ──────────────────────────────────────────────────────────────────
+  document.getElementById("reset-btn").addEventListener("click", () => {
+    selectedFile = null;
+    currentJobId = null;
+    fileLabel.textContent = "";
+    dropZone.classList.remove("has-file");
+    submitBtn.disabled = true;
+    logBox.innerHTML   = "";
+    document.getElementById("form-section").style.display     = "block";
+    document.getElementById("progress-section").style.display = "none";
+    document.getElementById("result-section").style.display   = "none";
+    showError("");
+  });
+
+  // ── Error helpers ──────────────────────────────────────────────────────────
+  function showError(msg) {
+    const b = document.getElementById("error-banner");
+    if (msg) { b.textContent = msg; b.style.display = "block"; }
+    else     { b.style.display = "none"; }
+  }
+  function showFormError(msg) {
+    document.getElementById("form-section").style.display     = "block";
+    document.getElementById("progress-section").style.display = "none";
+    showError(msg);
+  }
+</script>
+</body>
+</html>
