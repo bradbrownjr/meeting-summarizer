@@ -18,37 +18,36 @@ from pathlib import Path
 from flask import Flask, Response, jsonify, render_template, request, send_file
 
 
-# ── Org profiles ─────────────────────────────────────────────────────────────
+# ── Data directory (orgs.json lives here) ────────────────────────────────────
 
-ORGS = {
-    "wohd": {
-        "label": "Waterboro Old Home Days",
-        "short": "WOHD",
-        "context_template": (
-            "Waterboro Old Home Days Committee, Waterboro Town Hall, "
-            "{date}, meeting called to order at 6 PM"
-        ),
-        "name_template": "WOHD Committee Meeting \u2013 {month_year}",
-    },
-    "wssm": {
-        "label": "Wireless Society of Southern Maine",
-        "short": "WSSM",
-        "context_template": (
-            "Wireless Society of Southern Maine, South Windham Fire Station, "
-            "33 Main Street, Windham ME, {date}, meeting called to order at 7 PM"
-        ),
-        "name_template": "WSSM General Meeting \u2013 {month_year}",
-    },
-    "ect": {
-        "label": "WSSM Emergency Comm. Team / ARES",
-        "short": "ECT",
-        "context_template": (
-            "WSSM Emergency Communications Team / Cumberland County ARES, "
-            "CCEMA, 22 High Street, Windham ME, {date}, meeting called to order at 7 PM"
-        ),
-        "name_template": "WSSM-ECT Meeting \u2013 {month_year}",
-    },
-}
+DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent / "data"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+ORGS_FILE = DATA_DIR / "orgs.json"
+
+
+def load_orgs() -> dict:
+    if ORGS_FILE.exists():
+        try:
+            return json.loads(ORGS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def save_orgs(orgs: dict):
+    ORGS_FILE.write_text(json.dumps(orgs, indent=2, ensure_ascii=False),
+                         encoding="utf-8")
+
+
+def _make_org_id(label: str, existing: dict) -> str:
+    """Derive a slug from label; ensure uniqueness."""
+    base = re.sub(r"[^\w]", "", label.lower())[:20] or "org"
+    slug = base
+    i = 2
+    while slug in existing:
+        slug = f"{base}{i}"
+        i += 1
+    return slug
 
 
 # ── Flask app ─────────────────────────────────────────────────────────────────
@@ -134,7 +133,7 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
     try:
         _emit(job_id, "status", status="transcribing")
 
-        org = ORGS.get(org_id, {})
+        org = load_orgs().get(org_id, {})
         try:
             dt = datetime.strptime(date_str, "%Y-%m-%d")
             month_year = dt.strftime("%B %Y")
@@ -213,8 +212,62 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
 
 @app.route("/")
 def index():
-    return render_template("index.html", orgs=ORGS)
+    return render_template("index.html")
 
+
+# ── Org CRUD ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/orgs", methods=["GET"])
+def api_orgs_list():
+    return jsonify(load_orgs())
+
+
+@app.route("/api/orgs", methods=["POST"])
+def api_orgs_create():
+    data = request.get_json(force=True)
+    if not data or not data.get("label", "").strip():
+        return jsonify({"error": "label is required"}), 400
+    orgs = load_orgs()
+    org_id = data.get("id") or _make_org_id(data["label"], orgs)
+    orgs[org_id] = {
+        "label":            data["label"].strip(),
+        "short":            data.get("short", "").strip(),
+        "context_template": data.get("context_template", "").strip(),
+        "name_template":    data.get("name_template", "Meeting \u2013 {month_year}").strip(),
+    }
+    save_orgs(orgs)
+    return jsonify({"ok": True, "id": org_id, "orgs": orgs})
+
+
+@app.route("/api/orgs/<org_id>", methods=["PUT"])
+def api_orgs_update(org_id: str):
+    data = request.get_json(force=True)
+    if not data or not data.get("label", "").strip():
+        return jsonify({"error": "label is required"}), 400
+    orgs = load_orgs()
+    if org_id not in orgs:
+        return jsonify({"error": "Not found"}), 404
+    orgs[org_id] = {
+        "label":            data["label"].strip(),
+        "short":            data.get("short", "").strip(),
+        "context_template": data.get("context_template", "").strip(),
+        "name_template":    data.get("name_template", "Meeting \u2013 {month_year}").strip(),
+    }
+    save_orgs(orgs)
+    return jsonify({"ok": True, "orgs": orgs})
+
+
+@app.route("/api/orgs/<org_id>", methods=["DELETE"])
+def api_orgs_delete(org_id: str):
+    orgs = load_orgs()
+    if org_id not in orgs:
+        return jsonify({"error": "Not found"}), 404
+    del orgs[org_id]
+    save_orgs(orgs)
+    return jsonify({"ok": True, "orgs": orgs})
+
+
+# ── Job routes ────────────────────────────────────────────────────────────────
 
 @app.route("/api/run", methods=["POST"])
 def api_run():
@@ -222,10 +275,10 @@ def api_run():
     if not audio or not audio.filename:
         return jsonify({"ok": False, "error": "No audio file provided"}), 400
 
-    org_id      = request.form.get("org", "")
-    date_str    = request.form.get("date", datetime.today().strftime("%Y-%m-%d"))
-    names       = request.form.get("names", "")
-    backend     = request.form.get("backend", "claude-api")
+    org_id       = request.form.get("org", "")
+    date_str     = request.form.get("date", datetime.today().strftime("%Y-%m-%d"))
+    names        = request.form.get("names", "")
+    backend      = request.form.get("backend", "claude-api")
     ollama_model = request.form.get("ollama_model", "")
 
     job_id = _new_job()

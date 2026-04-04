@@ -15,6 +15,7 @@
       --primary-h: #245a3c;
       --accent:    #52b788;
       --danger:    #c0392b;
+      --danger-h:  #a93226;
       --text:      #1a1a1a;
       --muted:     #666;
       --radius:    8px;
@@ -48,23 +49,15 @@
       margin-left: auto;
       margin-right: auto;
     }
-
     .card h2 {
       font-size: 1.05rem;
       font-weight: 600;
       margin-bottom: 1rem;
       color: var(--primary);
-      display: flex;
-      align-items: center;
-      gap: .4rem;
     }
 
     /* Org pills */
-    .org-grid {
-      display: flex;
-      flex-wrap: wrap;
-      gap: .6rem;
-    }
+    .org-grid { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
     .org-pill {
       cursor: pointer;
       border: 2px solid var(--border);
@@ -82,9 +75,15 @@
       color: #fff;
       font-weight: 600;
     }
+    .org-empty {
+      font-size: .9rem;
+      color: var(--muted);
+      font-style: italic;
+    }
 
     /* Form rows */
     .field { margin-bottom: 1rem; }
+    .field:last-child { margin-bottom: 0; }
     .field label {
       display: block;
       font-size: .85rem;
@@ -94,9 +93,19 @@
       text-transform: uppercase;
       letter-spacing: .04em;
     }
+    .field .hint {
+      font-size: .78rem;
+      color: var(--muted);
+      margin-top: .25rem;
+      font-style: italic;
+      font-weight: 400;
+      text-transform: none;
+      letter-spacing: 0;
+    }
     .field input[type=date],
     .field input[type=text],
-    .field select {
+    .field select,
+    .field textarea {
       width: 100%;
       padding: .55rem .75rem;
       border: 1px solid var(--border);
@@ -104,8 +113,10 @@
       font-size: .95rem;
       background: var(--bg);
       color: var(--text);
+      font-family: inherit;
     }
-    .field input:focus, .field select:focus {
+    .field textarea { resize: vertical; min-height: 64px; line-height: 1.5; }
+    .field input:focus, .field select:focus, .field textarea:focus {
       outline: 2px solid var(--primary);
       outline-offset: 1px;
     }
@@ -129,45 +140,49 @@
       transition: border-color .2s, background .2s;
       background: var(--bg);
     }
-    #drop-zone.over { border-color: var(--accent); background: #e9f5ee; }
+    #drop-zone.over   { border-color: var(--accent); background: #e9f5ee; }
     #drop-zone.has-file { border-color: var(--primary); background: #eaf5ee; }
     #drop-zone p { color: var(--muted); font-size: .95rem; }
     #drop-zone .drop-icon { font-size: 2rem; margin-bottom: .5rem; }
-    #file-name {
-      margin-top: .5rem;
-      font-size: .9rem;
-      color: var(--primary);
-      font-weight: 600;
-    }
+    #file-name { margin-top: .5rem; font-size: .9rem; color: var(--primary); font-weight: 600; }
     #file-input { display: none; }
 
-    /* Submit */
-    #submit-btn {
-      width: 100%;
-      padding: .75rem;
-      background: var(--primary);
-      color: #fff;
-      border: none;
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: .35rem;
+      padding: .5rem 1.1rem;
       border-radius: var(--radius);
-      font-size: 1rem;
-      font-weight: 700;
+      font-size: .9rem;
+      font-weight: 600;
       cursor: pointer;
+      border: none;
+      transition: background .15s, color .15s;
+    }
+    .btn-primary   { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-h); }
+    .btn-outline   { background: var(--bg); color: var(--primary); border: 1px solid var(--primary); }
+    .btn-outline:hover { background: #e9f5ee; }
+    .btn-danger    { background: var(--danger); color: #fff; }
+    .btn-danger:hover { background: var(--danger-h); }
+    .btn-ghost     { background: none; border: none; color: var(--muted); font-size: .85rem; cursor: pointer; padding: .3rem .5rem; }
+    .btn-ghost:hover { color: var(--text); }
+    .btn:disabled  { opacity: .5; cursor: not-allowed; }
+
+    #submit-btn {
+      width: 100%; padding: .75rem; font-size: 1rem; font-weight: 700;
+      max-width: 720px; display: block; margin: 0 auto;
+      background: var(--primary); color: #fff; border: none;
+      border-radius: var(--radius); cursor: pointer;
       transition: background .15s;
-      max-width: 720px;
-      display: block;
-      margin: 0 auto;
     }
     #submit-btn:hover:not(:disabled) { background: var(--primary-h); }
     #submit-btn:disabled { opacity: .55; cursor: not-allowed; }
 
     /* Progress */
     #progress-section { display: none; }
-    .status-bar {
-      display: flex;
-      align-items: center;
-      gap: .75rem;
-      margin-bottom: .75rem;
-    }
+    .status-bar { display: flex; align-items: center; gap: .75rem; margin-bottom: .75rem; }
     .spinner {
       width: 20px; height: 20px;
       border: 3px solid var(--border);
@@ -180,29 +195,19 @@
     #status-text { font-weight: 600; }
 
     #log-box {
-      background: #1e1e1e;
-      color: #d4d4d4;
+      background: #1e1e1e; color: #d4d4d4;
       border-radius: var(--radius);
       padding: .75rem 1rem;
       font-family: "SF Mono", Consolas, monospace;
-      font-size: .8rem;
-      line-height: 1.6;
-      max-height: 240px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      word-break: break-word;
+      font-size: .8rem; line-height: 1.6;
+      max-height: 240px; overflow-y: auto;
+      white-space: pre-wrap; word-break: break-word;
     }
     #log-box .log-error { color: #f48771; }
 
     /* Results */
     #result-section { display: none; }
-
-    .tab-bar {
-      display: flex;
-      gap: .5rem;
-      margin-bottom: 1rem;
-      flex-wrap: wrap;
-    }
+    .tab-bar { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
     .tab-btn {
       padding: .45rem 1rem;
       border: 1px solid var(--border);
@@ -212,53 +217,28 @@
       font-size: .9rem;
       transition: background .15s, border-color .15s;
     }
-    .tab-btn.active {
-      background: var(--primary);
-      color: #fff;
-      border-color: var(--primary);
-      font-weight: 600;
-    }
-
+    .tab-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); font-weight: 600; }
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
-
     .result-text {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 1rem;
-      font-size: .9rem;
-      line-height: 1.7;
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 520px;
-      overflow-y: auto;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 1rem;
+      font-size: .9rem; line-height: 1.7;
+      white-space: pre-wrap; word-break: break-word;
+      max-height: 520px; overflow-y: auto;
     }
-
-    .dl-row {
-      display: flex;
-      gap: .75rem;
-      margin-top: 1rem;
-      flex-wrap: wrap;
-    }
+    .dl-row { display: flex; gap: .75rem; margin-top: 1rem; flex-wrap: wrap; }
     .dl-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: .4rem;
+      display: inline-flex; align-items: center; gap: .4rem;
       padding: .5rem 1.1rem;
-      background: var(--primary);
-      color: #fff;
-      border: none;
-      border-radius: var(--radius);
-      font-size: .9rem;
-      cursor: pointer;
-      text-decoration: none;
+      background: var(--primary); color: #fff;
+      border: none; border-radius: var(--radius);
+      font-size: .9rem; cursor: pointer; text-decoration: none;
       transition: background .15s;
     }
     .dl-btn:hover { background: var(--primary-h); }
     .dl-btn.secondary {
-      background: var(--bg);
-      color: var(--primary);
+      background: var(--bg); color: var(--primary);
       border: 1px solid var(--primary);
     }
     .dl-btn.secondary:hover { background: #e9f5ee; }
@@ -266,31 +246,86 @@
     /* Error banner */
     #error-banner {
       display: none;
-      background: #fdf0ed;
-      border: 1px solid var(--danger);
-      border-radius: var(--radius);
-      padding: .9rem 1.1rem;
-      color: var(--danger);
-      font-size: .9rem;
-      max-width: 720px;
-      margin: 0 auto 1.25rem;
+      background: #fdf0ed; border: 1px solid var(--danger);
+      border-radius: var(--radius); padding: .9rem 1.1rem;
+      color: var(--danger); font-size: .9rem;
+      max-width: 720px; margin: 0 auto 1.25rem;
     }
 
     /* Reset */
     #reset-btn {
+      display: block; margin: .75rem auto 0;
+      background: none; border: none;
+      color: var(--muted); font-size: .9rem;
+      cursor: pointer; text-decoration: underline;
+    }
+
+    /* ── Manage orgs panel ───────────────────────────────────────────────── */
+    #manage-toggle {
       display: block;
-      margin: .75rem auto 0;
+      text-align: right;
+      font-size: .82rem;
+      color: var(--muted);
+      cursor: pointer;
+      margin-top: .6rem;
       background: none;
       border: none;
-      color: var(--muted);
-      font-size: .9rem;
-      cursor: pointer;
+      padding: 0;
       text-decoration: underline;
+    }
+    #manage-toggle:hover { color: var(--primary); }
+
+    #manage-panel {
+      display: none;
+      margin-top: 1rem;
+      border-top: 1px solid var(--border);
+      padding-top: 1rem;
+    }
+    #manage-panel h3 {
+      font-size: .95rem;
+      font-weight: 700;
+      color: var(--primary);
+      margin-bottom: .75rem;
+    }
+
+    /* Org list in manage panel */
+    .org-row {
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      padding: .5rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .org-row:last-child { border-bottom: none; }
+    .org-row-name { flex: 1; font-size: .9rem; }
+    .org-row-short { font-size: .8rem; color: var(--muted); min-width: 3rem; }
+
+    /* Org editor form */
+    #org-editor {
+      display: none;
+      margin-top: 1rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+    }
+    #org-editor h4 {
+      font-size: .9rem;
+      font-weight: 700;
+      margin-bottom: .75rem;
+      color: var(--text);
+    }
+    .editor-actions {
+      display: flex;
+      gap: .5rem;
+      margin-top: .75rem;
+      flex-wrap: wrap;
     }
 
     @media (max-width: 480px) {
       .card { padding: 1.1rem; }
       header h1 { font-size: 1.4rem; }
+      .org-row-short { display: none; }
     }
   </style>
 </head>
@@ -303,7 +338,7 @@
 
 <div id="error-banner"></div>
 
-<!-- Form card -->
+<!-- Form -->
 <div id="form-section">
   <div class="card">
     <h2>&#128197; Meeting Details</h2>
@@ -312,16 +347,51 @@
     <div class="field">
       <label>Committee / Organization</label>
       <div class="org-grid" id="org-grid">
-        {% for key, org in orgs.items() %}
-        <div class="org-pill{% if loop.first %} selected{% endif %}"
-             data-org="{{ key }}">{{ org.label }}</div>
-        {% endfor %}
+        <span class="org-empty">Loading&hellip;</span>
       </div>
-      <input type="hidden" id="org-input" value="{{ orgs.keys()|list|first }}" />
+      <input type="hidden" id="org-input" value="" />
+      <button id="manage-toggle" type="button">Manage committees</button>
+    </div>
+
+    <!-- Manage panel (inline, hidden by default) -->
+    <div id="manage-panel">
+      <h3>Committees</h3>
+      <div id="org-list"></div>
+      <div style="margin-top:.75rem">
+        <button class="btn btn-outline" type="button" id="add-org-btn">+ Add committee</button>
+      </div>
+
+      <!-- Inline editor -->
+      <div id="org-editor">
+        <h4 id="editor-title">New Committee</h4>
+        <div class="field">
+          <label>Name</label>
+          <input type="text" id="ed-label" placeholder="e.g. Waterboro Old Home Days" />
+        </div>
+        <div class="field">
+          <label>Short code</label>
+          <input type="text" id="ed-short" placeholder="e.g. WOHD" maxlength="10" style="max-width:120px" />
+        </div>
+        <div class="field">
+          <label>Context <span class="hint">{date} is replaced with the meeting date</span></label>
+          <textarea id="ed-context" rows="3"
+            placeholder="e.g. Waterboro Old Home Days Committee, Waterboro Town Hall, {date}, meeting called to order at 6 PM"></textarea>
+        </div>
+        <div class="field">
+          <label>Meeting title template <span class="hint">{month_year} is replaced (e.g. April 2026)</span></label>
+          <input type="text" id="ed-name-tpl"
+            placeholder="e.g. WOHD Committee Meeting &#8211; {month_year}" />
+        </div>
+        <div class="editor-actions">
+          <button class="btn btn-primary" type="button" id="save-org-btn">Save</button>
+          <button class="btn btn-ghost" type="button" id="cancel-org-btn">Cancel</button>
+          <button class="btn btn-danger" type="button" id="delete-org-btn" style="display:none; margin-left:auto">Delete</button>
+        </div>
+      </div>
     </div>
 
     <!-- Date -->
-    <div class="field">
+    <div class="field" style="margin-top:1rem">
       <label>Meeting Date</label>
       <input type="date" id="date-input" />
     </div>
@@ -329,14 +399,12 @@
     <!-- Names -->
     <div class="field">
       <label>Attendee Names <span style="font-weight:400;text-transform:none">(optional — improves transcription)</span></label>
-      <input type="text" id="names-input"
-             placeholder="e.g. Amy, Brad, John Smith" />
+      <input type="text" id="names-input" placeholder="e.g. Amy, Brad, John Smith" />
     </div>
 
     <!-- Advanced -->
     <details>
       <summary>Advanced options</summary>
-
       <div class="field">
         <label>Minutes Backend</label>
         <select id="backend-input">
@@ -345,7 +413,6 @@
           <option value="transcript_only">Transcript only (no summary)</option>
         </select>
       </div>
-
       <div class="field" id="ollama-model-field" style="display:none">
         <label>Ollama Model</label>
         <input type="text" id="ollama-model-input" placeholder="gemma4:e4b" />
@@ -369,12 +436,12 @@
   <button id="submit-btn" disabled>Generate Minutes</button>
 </div>
 
-<!-- Progress card -->
+<!-- Progress -->
 <div id="progress-section">
   <div class="card">
     <h2>&#9881; Processing</h2>
     <div class="status-bar">
-      <div class="spinner" id="spinner"></div>
+      <div class="spinner"></div>
       <span id="status-text">Starting&hellip;</span>
     </div>
     <div id="log-box"></div>
@@ -385,219 +452,345 @@
 <div id="result-section">
   <div class="card">
     <h2 id="result-title">&#9989; Results</h2>
-
     <div class="tab-bar">
       <button class="tab-btn active" data-tab="minutes">Minutes</button>
       <button class="tab-btn" data-tab="transcript">Transcript</button>
     </div>
-
     <div id="tab-minutes" class="tab-pane active">
       <div class="result-text" id="minutes-text"></div>
       <div class="dl-row">
         <a id="dl-minutes" class="dl-btn" href="#" download>&#8595; Download Minutes (.md)</a>
       </div>
     </div>
-
     <div id="tab-transcript" class="tab-pane">
       <div class="result-text" id="transcript-text"></div>
       <div class="dl-row">
         <a id="dl-transcript" class="dl-btn secondary" href="#" download>&#8595; Download Transcript (.txt)</a>
       </div>
     </div>
-
     <button id="reset-btn">Start a new meeting</button>
   </div>
 </div>
 
 <script>
-  // ── State ──────────────────────────────────────────────────────────────────
-  let selectedOrg  = document.getElementById("org-input").value;
-  let selectedFile = null;
-  let currentJobId = null;
+// ── State ──────────────────────────────────────────────────────────────────
+let orgs         = {};       // id -> {label, short, context_template, name_template}
+let selectedOrg  = null;
+let selectedFile = null;
+let currentJobId = null;
+let editingOrgId = null;     // null = new, string = editing existing
 
-  // ── Today's date default ───────────────────────────────────────────────────
-  const today = new Date().toISOString().slice(0, 10);
-  document.getElementById("date-input").value = today;
+// ── Init ───────────────────────────────────────────────────────────────────
+document.getElementById("date-input").value = new Date().toISOString().slice(0, 10);
 
-  // ── Org pills ──────────────────────────────────────────────────────────────
-  document.querySelectorAll(".org-pill").forEach(pill => {
+async function loadOrgs() {
+  const r = await fetch("/api/orgs");
+  orgs = await r.json();
+  renderOrgPills();
+  renderOrgList();
+}
+loadOrgs();
+
+// ── Org pills ──────────────────────────────────────────────────────────────
+function renderOrgPills() {
+  const grid = document.getElementById("org-grid");
+  const ids  = Object.keys(orgs);
+
+  // Clear existing pills (keep nothing, they'll be re-added)
+  grid.querySelectorAll(".org-pill, .org-empty").forEach(el => el.remove());
+
+  if (ids.length === 0) {
+    grid.insertAdjacentHTML("afterbegin",
+      `<span class="org-empty">No committees configured yet &mdash; add one below.</span>`);
+    selectedOrg = null;
+    document.getElementById("org-input").value = "";
+    return;
+  }
+
+  // Auto-select first if current selection gone
+  if (!selectedOrg || !orgs[selectedOrg]) selectedOrg = ids[0];
+  document.getElementById("org-input").value = selectedOrg;
+
+  ids.forEach(id => {
+    const pill = document.createElement("div");
+    pill.className = "org-pill" + (id === selectedOrg ? " selected" : "");
+    pill.dataset.org = id;
+    pill.textContent = orgs[id].label;
     pill.addEventListener("click", () => {
       document.querySelectorAll(".org-pill").forEach(p => p.classList.remove("selected"));
       pill.classList.add("selected");
-      selectedOrg = pill.dataset.org;
-      document.getElementById("org-input").value = selectedOrg;
+      selectedOrg = id;
+      document.getElementById("org-input").value = id;
     });
+    grid.insertBefore(pill, grid.querySelector("#manage-toggle") || null);
   });
+}
 
-  // ── Backend toggle ─────────────────────────────────────────────────────────
-  document.getElementById("backend-input").addEventListener("change", e => {
-    document.getElementById("ollama-model-field").style.display =
-      e.target.value === "ollama" ? "block" : "none";
-  });
+// ── Manage panel toggle ────────────────────────────────────────────────────
+document.getElementById("manage-toggle").addEventListener("click", () => {
+  const panel = document.getElementById("manage-panel");
+  const open  = panel.style.display === "block";
+  panel.style.display = open ? "none" : "block";
+  document.getElementById("manage-toggle").textContent =
+    open ? "Manage committees" : "Hide";
+  if (!open) closeEditor();
+});
 
-  // ── Drop zone ──────────────────────────────────────────────────────────────
-  const dropZone  = document.getElementById("drop-zone");
-  const fileInput = document.getElementById("file-input");
-  const fileLabel = document.getElementById("file-name");
-  const submitBtn = document.getElementById("submit-btn");
-
-  function setFile(file) {
-    selectedFile = file;
-    fileLabel.textContent = `\u2714 ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`;
-    dropZone.classList.add("has-file");
-    submitBtn.disabled = false;
+// ── Org list (inside manage panel) ────────────────────────────────────────
+function renderOrgList() {
+  const container = document.getElementById("org-list");
+  container.innerHTML = "";
+  const ids = Object.keys(orgs);
+  if (ids.length === 0) {
+    container.innerHTML = `<p style="font-size:.85rem;color:var(--muted);padding:.5rem 0">No committees yet.</p>`;
+    return;
   }
-
-  dropZone.addEventListener("click",    () => fileInput.click());
-  dropZone.addEventListener("keydown",  e => { if (e.key === "Enter" || e.key === " ") fileInput.click(); });
-  fileInput.addEventListener("change",  e => { if (e.target.files[0]) setFile(e.target.files[0]); });
-
-  dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.classList.add("over"); });
-  dropZone.addEventListener("dragleave", e => { dropZone.classList.remove("over"); });
-  dropZone.addEventListener("drop", e => {
-    e.preventDefault();
-    dropZone.classList.remove("over");
-    const f = e.dataTransfer.files[0];
-    if (f) setFile(f);
+  ids.forEach(id => {
+    const row = document.createElement("div");
+    row.className = "org-row";
+    row.innerHTML = `
+      <span class="org-row-short">${escHtml(orgs[id].short || "")}</span>
+      <span class="org-row-name">${escHtml(orgs[id].label)}</span>
+      <button class="btn btn-ghost" data-edit="${id}">Edit</button>
+    `;
+    row.querySelector("[data-edit]").addEventListener("click", () => openEditor(id));
+    container.appendChild(row);
   });
+}
 
-  // ── Submit ─────────────────────────────────────────────────────────────────
-  submitBtn.addEventListener("click", async () => {
-    if (!selectedFile) return;
-    showError("");
+// ── Org editor ─────────────────────────────────────────────────────────────
+document.getElementById("add-org-btn").addEventListener("click", () => openEditor(null));
+document.getElementById("cancel-org-btn").addEventListener("click", closeEditor);
 
-    const fd = new FormData();
-    fd.append("audio",        selectedFile);
-    fd.append("org",          selectedOrg);
-    fd.append("date",         document.getElementById("date-input").value);
-    fd.append("names",        document.getElementById("names-input").value.trim());
-    fd.append("backend",      document.getElementById("backend-input").value);
-    fd.append("ollama_model", document.getElementById("ollama-model-input").value.trim());
+document.getElementById("save-org-btn").addEventListener("click", async () => {
+  const payload = {
+    label:            document.getElementById("ed-label").value.trim(),
+    short:            document.getElementById("ed-short").value.trim(),
+    context_template: document.getElementById("ed-context").value.trim(),
+    name_template:    document.getElementById("ed-name-tpl").value.trim(),
+  };
+  if (!payload.label) { alert("Name is required."); return; }
 
-    document.getElementById("form-section").style.display     = "none";
-    document.getElementById("progress-section").style.display = "block";
-    setStatus("Uploading…");
+  let resp;
+  if (editingOrgId) {
+    resp = await fetch(`/api/orgs/${editingOrgId}`, {
+      method: "PUT",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+  } else {
+    resp = await fetch("/api/orgs", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+  }
+  const data = await resp.json();
+  if (!resp.ok) { alert(data.error || "Save failed"); return; }
+  orgs = data.orgs;
+  renderOrgPills();
+  renderOrgList();
+  closeEditor();
+});
 
-    let resp;
-    try {
-      resp = await fetch("/api/run", { method: "POST", body: fd });
-    } catch (err) {
-      showFormError(`Upload failed: ${err.message}`);
-      return;
-    }
-    const json = await resp.json();
-    if (!json.ok) { showFormError(json.error || "Server error"); return; }
+document.getElementById("delete-org-btn").addEventListener("click", async () => {
+  if (!editingOrgId) return;
+  if (!confirm(`Delete "${orgs[editingOrgId]?.label}"?`)) return;
+  const resp = await fetch(`/api/orgs/${editingOrgId}`, { method: "DELETE" });
+  const data = await resp.json();
+  if (!resp.ok) { alert(data.error || "Delete failed"); return; }
+  orgs = data.orgs;
+  renderOrgPills();
+  renderOrgList();
+  closeEditor();
+});
 
-    currentJobId = json.job_id;
-    listenSSE(currentJobId);
-  });
+function openEditor(id) {
+  editingOrgId = id;
+  const editor = document.getElementById("org-editor");
+  editor.style.display = "block";
+  document.getElementById("editor-title").textContent = id ? "Edit Committee" : "New Committee";
+  document.getElementById("delete-org-btn").style.display = id ? "inline-flex" : "none";
 
-  // ── SSE ────────────────────────────────────────────────────────────────────
-  function listenSSE(jobId) {
-    const es = new EventSource(`/api/jobs/${jobId}/stream`);
+  if (id && orgs[id]) {
+    const o = orgs[id];
+    document.getElementById("ed-label").value    = o.label            || "";
+    document.getElementById("ed-short").value    = o.short            || "";
+    document.getElementById("ed-context").value  = o.context_template || "";
+    document.getElementById("ed-name-tpl").value = o.name_template    || "";
+  } else {
+    document.getElementById("ed-label").value    = "";
+    document.getElementById("ed-short").value    = "";
+    document.getElementById("ed-context").value  = "";
+    document.getElementById("ed-name-tpl").value = "Meeting \u2013 {month_year}";
+  }
+  document.getElementById("ed-label").focus();
+}
 
-    es.onmessage = e => {
-      let evt;
-      try { evt = JSON.parse(e.data); } catch { return; }
+function closeEditor() {
+  document.getElementById("org-editor").style.display = "none";
+  editingOrgId = null;
+}
 
-      if (evt.type === "log") {
-        appendLog(evt.data.message || "", evt.data.level);
+// ── Backend toggle ─────────────────────────────────────────────────────────
+document.getElementById("backend-input").addEventListener("change", e => {
+  document.getElementById("ollama-model-field").style.display =
+    e.target.value === "ollama" ? "block" : "none";
+});
 
-      } else if (evt.type === "status") {
-        const s = evt.data.status;
-        if (s === "transcribing") setStatus("Transcribing audio…");
-        else if (s === "generating") setStatus("Generating minutes…");
+// ── Drop zone ──────────────────────────────────────────────────────────────
+const dropZone  = document.getElementById("drop-zone");
+const fileInput = document.getElementById("file-input");
+const fileLabel = document.getElementById("file-name");
+const submitBtn = document.getElementById("submit-btn");
 
-      } else if (evt.type === "result") {
-        es.close();
-        showResults(jobId, evt.data.minutes, evt.data.transcript);
+function setFile(file) {
+  selectedFile = file;
+  fileLabel.textContent = `\u2714 ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`;
+  dropZone.classList.add("has-file");
+  submitBtn.disabled = false;
+}
 
-      } else if (evt.type === "error") {
-        es.close();
-        showFormError(evt.data.message || "An error occurred.");
+dropZone.addEventListener("click",    () => fileInput.click());
+dropZone.addEventListener("keydown",  e => { if (e.key === "Enter" || e.key === " ") fileInput.click(); });
+fileInput.addEventListener("change",  e => { if (e.target.files[0]) setFile(e.target.files[0]); });
+dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.classList.add("over"); });
+dropZone.addEventListener("dragleave", () => dropZone.classList.remove("over"));
+dropZone.addEventListener("drop", e => {
+  e.preventDefault();
+  dropZone.classList.remove("over");
+  const f = e.dataTransfer.files[0];
+  if (f) setFile(f);
+});
 
-      } else if (evt.type === "eof") {
-        es.close();
-      }
-    };
+// ── Submit ─────────────────────────────────────────────────────────────────
+submitBtn.addEventListener("click", async () => {
+  if (!selectedFile) return;
+  showError("");
 
-    es.onerror = () => {
-      // SSE closed — poll once for final state
+  const fd = new FormData();
+  fd.append("audio",        selectedFile);
+  fd.append("org",          document.getElementById("org-input").value);
+  fd.append("date",         document.getElementById("date-input").value);
+  fd.append("names",        document.getElementById("names-input").value.trim());
+  fd.append("backend",      document.getElementById("backend-input").value);
+  fd.append("ollama_model", document.getElementById("ollama-model-input").value.trim());
+
+  document.getElementById("form-section").style.display     = "none";
+  document.getElementById("progress-section").style.display = "block";
+  setStatus("Uploading\u2026");
+
+  let resp;
+  try {
+    resp = await fetch("/api/run", { method: "POST", body: fd });
+  } catch (err) {
+    showFormError(`Upload failed: ${err.message}`);
+    return;
+  }
+  const json = await resp.json();
+  if (!json.ok) { showFormError(json.error || "Server error"); return; }
+
+  currentJobId = json.job_id;
+  listenSSE(currentJobId);
+});
+
+// ── SSE ────────────────────────────────────────────────────────────────────
+function listenSSE(jobId) {
+  const es = new EventSource(`/api/jobs/${jobId}/stream`);
+  es.onmessage = e => {
+    let evt;
+    try { evt = JSON.parse(e.data); } catch { return; }
+
+    if (evt.type === "log") {
+      appendLog(evt.data.message || "", evt.data.level);
+    } else if (evt.type === "status") {
+      const s = evt.data.status;
+      if      (s === "transcribing") setStatus("Transcribing audio\u2026");
+      else if (s === "generating")   setStatus("Generating minutes\u2026");
+    } else if (evt.type === "result") {
       es.close();
-      fetch(`/api/jobs/${jobId}`)
-        .then(r => r.json())
-        .then(j => {
-          if (j.status === "done")   showResults(jobId, j.result_md, j.transcript);
-          else if (j.status === "error") showFormError(j.error || "Unknown error");
-        });
-    };
-  }
+      showResults(jobId, evt.data.minutes, evt.data.transcript);
+    } else if (evt.type === "error") {
+      es.close();
+      showFormError(evt.data.message || "An error occurred.");
+    } else if (evt.type === "eof") {
+      es.close();
+    }
+  };
+  es.onerror = () => {
+    es.close();
+    fetch(`/api/jobs/${jobId}`)
+      .then(r => r.json())
+      .then(j => {
+        if (j.status === "done")  showResults(jobId, j.result_md, j.transcript);
+        else if (j.status === "error") showFormError(j.error || "Unknown error");
+      });
+  };
+}
 
-  // ── Log ────────────────────────────────────────────────────────────────────
-  const logBox = document.getElementById("log-box");
-  function appendLog(msg, level) {
-    const line = document.createElement("div");
-    if (level === "error") line.className = "log-error";
-    line.textContent = msg;
-    logBox.appendChild(line);
-    logBox.scrollTop = logBox.scrollHeight;
-  }
-  function setStatus(msg) {
-    document.getElementById("status-text").textContent = msg;
-  }
+// ── Log ────────────────────────────────────────────────────────────────────
+const logBox = document.getElementById("log-box");
+function appendLog(msg, level) {
+  const line = document.createElement("div");
+  if (level === "error") line.className = "log-error";
+  line.textContent = msg;
+  logBox.appendChild(line);
+  logBox.scrollTop = logBox.scrollHeight;
+}
+function setStatus(msg) { document.getElementById("status-text").textContent = msg; }
 
-  // ── Results ────────────────────────────────────────────────────────────────
-  function showResults(jobId, minutes, transcript) {
-    document.getElementById("progress-section").style.display = "none";
-    document.getElementById("result-section").style.display   = "block";
+// ── Results ────────────────────────────────────────────────────────────────
+function showResults(jobId, minutes, transcript) {
+  document.getElementById("progress-section").style.display = "none";
+  document.getElementById("result-section").style.display   = "block";
+  document.getElementById("minutes-text").textContent    = minutes    || "(no minutes generated)";
+  document.getElementById("transcript-text").textContent = transcript || "(no transcript available)";
+  if (!minutes && transcript) activateTab("transcript");
+  document.getElementById("dl-minutes").href    = `/api/jobs/${jobId}/download?type=minutes`;
+  document.getElementById("dl-transcript").href = `/api/jobs/${jobId}/download?type=transcript`;
+}
 
-    document.getElementById("minutes-text").textContent    = minutes    || "(no minutes generated)";
-    document.getElementById("transcript-text").textContent = transcript || "(no transcript available)";
+// ── Tabs ───────────────────────────────────────────────────────────────────
+document.querySelectorAll(".tab-btn").forEach(btn =>
+  btn.addEventListener("click", () => activateTab(btn.dataset.tab)));
+function activateTab(name) {
+  document.querySelectorAll(".tab-btn").forEach(b =>
+    b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".tab-pane").forEach(p =>
+    p.classList.toggle("active", p.id === `tab-${name}`));
+}
 
-    // Switch to transcript tab if minutes empty
-    if (!minutes && transcript) activateTab("transcript");
+// ── Reset ──────────────────────────────────────────────────────────────────
+document.getElementById("reset-btn").addEventListener("click", () => {
+  selectedFile = null;
+  currentJobId = null;
+  fileLabel.textContent = "";
+  dropZone.classList.remove("has-file");
+  submitBtn.disabled = true;
+  logBox.innerHTML   = "";
+  document.getElementById("form-section").style.display     = "block";
+  document.getElementById("progress-section").style.display = "none";
+  document.getElementById("result-section").style.display   = "none";
+  document.getElementById("manage-panel").style.display     = "none";
+  document.getElementById("manage-toggle").textContent      = "Manage committees";
+  showError("");
+  closeEditor();
+});
 
-    // Download links via API (avoids huge data URIs)
-    document.getElementById("dl-minutes").href    = `/api/jobs/${jobId}/download?type=minutes`;
-    document.getElementById("dl-transcript").href = `/api/jobs/${jobId}/download?type=transcript`;
-  }
-
-  // ── Tabs ───────────────────────────────────────────────────────────────────
-  document.querySelectorAll(".tab-btn").forEach(btn => {
-    btn.addEventListener("click", () => activateTab(btn.dataset.tab));
-  });
-  function activateTab(name) {
-    document.querySelectorAll(".tab-btn").forEach(b =>
-      b.classList.toggle("active", b.dataset.tab === name));
-    document.querySelectorAll(".tab-pane").forEach(p =>
-      p.classList.toggle("active", p.id === `tab-${name}`));
-  }
-
-  // ── Reset ──────────────────────────────────────────────────────────────────
-  document.getElementById("reset-btn").addEventListener("click", () => {
-    selectedFile = null;
-    currentJobId = null;
-    fileLabel.textContent = "";
-    dropZone.classList.remove("has-file");
-    submitBtn.disabled = true;
-    logBox.innerHTML   = "";
-    document.getElementById("form-section").style.display     = "block";
-    document.getElementById("progress-section").style.display = "none";
-    document.getElementById("result-section").style.display   = "none";
-    showError("");
-  });
-
-  // ── Error helpers ──────────────────────────────────────────────────────────
-  function showError(msg) {
-    const b = document.getElementById("error-banner");
-    if (msg) { b.textContent = msg; b.style.display = "block"; }
-    else     { b.style.display = "none"; }
-  }
-  function showFormError(msg) {
-    document.getElementById("form-section").style.display     = "block";
-    document.getElementById("progress-section").style.display = "none";
-    showError(msg);
-  }
+// ── Helpers ────────────────────────────────────────────────────────────────
+function showError(msg) {
+  const b = document.getElementById("error-banner");
+  if (msg) { b.textContent = msg; b.style.display = "block"; }
+  else     { b.style.display = "none"; }
+}
+function showFormError(msg) {
+  document.getElementById("form-section").style.display     = "block";
+  document.getElementById("progress-section").style.display = "none";
+  showError(msg);
+}
+function escHtml(s) {
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
 </script>
 </body>
 </html>

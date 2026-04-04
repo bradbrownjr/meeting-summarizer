@@ -8,10 +8,13 @@ services:
       - "8082:8082"
     volumes:
       - meeting-hf-cache:/root/.cache/huggingface
+      - meeting-data:/data
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - UPLOAD_DIR=/tmp/meeting_uploads
+      - DATA_DIR=/data
       - WEB_PORT=8082
 
 volumes:
   meeting-hf-cache:
+  meeting-data:

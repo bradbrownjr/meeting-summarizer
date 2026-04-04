@@ -13,9 +13,11 @@ COPY web.py .
 COPY templates/ ./templates/
 
 # Whisper model cache (avoids re-download on restart)
-VOLUME ["/root/.cache/huggingface"]
+# /data holds orgs.json (committee templates, user-configured)
+VOLUME ["/root/.cache/huggingface", "/data"]
 
 ENV UPLOAD_DIR=/tmp/meeting_uploads
+ENV DATA_DIR=/data
 ENV WEB_PORT=8082
 
 EXPOSE 8082

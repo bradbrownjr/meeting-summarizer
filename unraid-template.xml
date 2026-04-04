@@ -12,7 +12,7 @@
   <WebUI>http://[IP]:[PORT:8082]/</WebUI>
   <Icon>https://raw.githubusercontent.com/bradbrownjr/meeting-summarizer/main/docs/icon.png</Icon>
   <ExtraParams>--restart=unless-stopped</ExtraParams>
-  <Description>Meeting Summarizer — transcribes audio recordings with distil-Whisper and generates structured meeting minutes via Claude API or a local Ollama model. Pre-configured for WOHD, WSSM, and ECT committee meetings.</Description>
+  <Description>Meeting Summarizer — transcribes audio recordings with distil-Whisper and generates structured meeting minutes via Claude API or a local Ollama model. Configure your own committees via the web UI; settings persist in the Data path.</Description>
 
   <Networking>
     <Mode>bridge</Mode>
@@ -29,6 +29,11 @@
     <Volume>
       <HostDir>/mnt/user/appdata/meeting-summarizer/hf-cache</HostDir>
       <ContainerDir>/root/.cache/huggingface</ContainerDir>
+      <Mode>rw</Mode>
+    </Volume>
+    <Volume>
+      <HostDir>/mnt/user/appdata/meeting-summarizer/data</HostDir>
+      <ContainerDir>/data</ContainerDir>
       <Mode>rw</Mode>
     </Volume>
   </Data>
@@ -48,6 +53,10 @@
   <Config Name="HuggingFace Cache" Target="/root/.cache/huggingface" Default="/mnt/user/appdata/meeting-summarizer/hf-cache" Mode="rw"
           Description="Host path for Whisper model cache. Persists downloaded models across container restarts."
           Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/meeting-summarizer/hf-cache</Config>
+
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/meeting-summarizer/data" Mode="rw"
+          Description="Host path for committee templates (orgs.json). Add and edit committees via the web UI; this path ensures they survive container updates."
+          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/meeting-summarizer/data</Config>
 
   <Config Name="Anthropic API Key" Target="ANTHROPIC_API_KEY" Default="" Mode=""
           Description="Your Anthropic API key for Claude-based minute generation. Leave blank to use Ollama instead."
