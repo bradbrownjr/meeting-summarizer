@@ -483,14 +483,14 @@
       <div class="field">
         <label>Minutes Backend</label>
         <select id="backend-input">
-          <option value="claude-api">Claude API (recommended)</option>
-          <option value="ollama">Ollama (local LLM)</option>
-          <option value="transcript_only">Transcript only (no summary)</option>
+          <option value="claude-api" {% if default_backend == 'claude-api' %}selected{% endif %}>Claude API</option>
+          <option value="ollama" {% if default_backend == 'ollama' %}selected{% endif %}>Ollama (local LLM)</option>
+          <option value="transcript_only" {% if default_backend == 'transcript_only' %}selected{% endif %}>Transcript only (no summary)</option>
         </select>
       </div>
-      <div class="field" id="ollama-model-field" style="display:none">
+      <div class="field" id="ollama-model-field" style="display:{% if default_backend == 'ollama' %}block{% else %}none{% endif %}">
         <label>Ollama Model</label>
-        <input type="text" id="ollama-model-input" placeholder="gemma4:e4b" />
+        <input type="text" id="ollama-model-input" value="{{ default_ollama_model }}" placeholder="gemma4:e4b" />
       </div>
     </details>
   </div>

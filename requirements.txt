@@ -1,5 +1,4 @@
 anthropic>=0.40.0
 requests>=2.32.0
 flask>=3.0.0
-faster-whisper>=1.1.0
 pyyaml>=6.0

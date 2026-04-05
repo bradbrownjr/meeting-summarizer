@@ -30,6 +30,9 @@ TEMPLATES_DIR = Path(os.environ.get(
     Path.home() / "meeting-templates",
 ))
 
+DEFAULT_BACKEND      = os.environ.get("DEFAULT_BACKEND",      "claude-api")
+DEFAULT_OLLAMA_MODEL = os.environ.get("DEFAULT_OLLAMA_MODEL", "gemma4:e4b")
+
 
 def load_orgs() -> dict:
     if ORGS_FILE.exists():
@@ -224,7 +227,11 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template(
+        "index.html",
+        default_backend=DEFAULT_BACKEND,
+        default_ollama_model=DEFAULT_OLLAMA_MODEL,
+    )
 
 
 # ── Org CRUD ──────────────────────────────────────────────────────────────────
