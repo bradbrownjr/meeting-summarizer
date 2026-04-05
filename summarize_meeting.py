@@ -159,19 +159,21 @@ def safe_filename(name: str) -> str:
 
 # ── Transcription ───────────────────────────────────────────────────────────────
 
-def ensure_model_downloaded(model: str) -> None:
+def ensure_model_downloaded(model: str, whisper_url: str = None) -> None:
+    url = whisper_url or WHISPER_URL
     encoded = model.replace("/", "%2F")
     print(f"  Pulling model {model} from Whisper API server ...")
-    resp = requests.post(f"{WHISPER_URL}/v1/models/{encoded}", timeout=600)
+    resp = requests.post(f"{url}/v1/models/{encoded}", timeout=600)
     resp.raise_for_status()
     print("  Model ready.")
 
 
-def unload_whisper_model(model: str) -> None:
+def unload_whisper_model(model: str, whisper_url: str = None) -> None:
     """Unload the Whisper model from the API server memory."""
+    url = whisper_url or WHISPER_URL
     encoded = model.replace("/", "%2F")
     try:
-        resp = requests.delete(f"{WHISPER_URL}/api/ps/{encoded}", timeout=30)
+        resp = requests.delete(f"{url}/api/ps/{encoded}", timeout=30)
         if resp.status_code in (200, 204):
             print("  Whisper model unloaded from server memory.")
         else:
@@ -180,11 +182,12 @@ def unload_whisper_model(model: str) -> None:
         print(f"  Warning: could not unload Whisper model: {e}")
 
 
-def unload_ollama_model(model: str) -> None:
+def unload_ollama_model(model: str, ollama_url: str = None) -> None:
     """Unload an Ollama model from memory by sending a keep_alive=0 request."""
+    url = ollama_url or OLLAMA_URL
     try:
         resp = requests.post(
-            f"{OLLAMA_URL}/api/generate",
+            f"{url}/api/generate",
             json={"model": model, "keep_alive": 0},
             timeout=30,
         )
@@ -198,8 +201,13 @@ def unload_ollama_model(model: str) -> None:
 
 def transcribe(audio_path: Path, cleanup: list,
                prompt: str = "", hotwords: str = "",
-               emit_callback=None) -> dict:
-    """Send audio to Speaches and return the verbose_json dict."""
+               emit_callback=None,
+               whisper_url: str = None,
+               whisper_model: str = None) -> dict:
+    """Send audio to the Whisper API server and return the verbose_json dict."""
+    url   = whisper_url   or WHISPER_URL
+    model = whisper_model or WHISPER_MODEL
+
     def _log(msg):
         print(f"  {msg}")
         if emit_callback:
@@ -209,10 +217,10 @@ def transcribe(audio_path: Path, cleanup: list,
                 pass
 
     size_kb = audio_path.stat().st_size // 1024
-    _log(f"Sending {audio_path.name} ({size_kb:,} KB) to Whisper API ({WHISPER_MODEL})...")
+    _log(f"Sending {audio_path.name} ({size_kb:,} KB) to Whisper API ({model})...")
 
     data = {
-        "model":           WHISPER_MODEL,
+        "model":           model,
         "response_format": "verbose_json",
         "vad_filter":      "true",
     }
@@ -223,20 +231,22 @@ def transcribe(audio_path: Path, cleanup: list,
 
     with open(audio_path, "rb") as fh:
         resp = requests.post(
-            f"{WHISPER_URL}/v1/audio/transcriptions",
+            f"{url}/v1/audio/transcriptions",
             files={"file": (audio_path.name, fh, mime_for(audio_path))},
             data=data,
             timeout=3600,
         )
 
     if resp.status_code == 404 and "not installed" in resp.text.lower():
-        ensure_model_downloaded(WHISPER_MODEL)
-        return transcribe(audio_path, cleanup, prompt, hotwords, emit_callback)
+        ensure_model_downloaded(model, whisper_url=url)
+        return transcribe(audio_path, cleanup, prompt, hotwords,
+                          emit_callback, whisper_url=url, whisper_model=model)
 
     if resp.status_code == 500 and audio_path.suffix.lower() != ".mp3":
         _log("Whisper API error — retrying with MP3 conversion ...")
         return transcribe(convert_to_mp3(audio_path, cleanup), cleanup,
-                          prompt, hotwords, emit_callback)
+                          prompt, hotwords, emit_callback,
+                          whisper_url=url, whisper_model=model)
 
     if resp.status_code != 200:
         raise RuntimeError(f"Transcription failed ({resp.status_code}):\n{resp.text}")
@@ -314,7 +324,9 @@ def _anchor_text(segments: list, before_time: float) -> str:
 
 def build_clean_transcript(audio_path: Path, result: dict,
                             cleanup: list, hotwords: str = "",
-                            emit_callback=None) -> str:
+                            emit_callback=None,
+                            whisper_url: str = None,
+                            whisper_model: str = None) -> str:
     """
     Detect hallucinated ranges, retry them with anchor prompts, and return
     a single clean transcript string.
@@ -356,7 +368,9 @@ def build_clean_transcript(audio_path: Path, result: dict,
             extract_from(audio_path, retry_from, tmp_path)
             retry_result = transcribe(tmp_path, cleanup, prompt=anchor,
                                       hotwords=hotwords,
-                                      emit_callback=emit_callback)
+                                      emit_callback=emit_callback,
+                                      whisper_url=whisper_url,
+                                      whisper_model=whisper_model)
             retry_segs   = retry_result.get("segments", [])
 
             # Shift timestamps back to the original timeline
@@ -410,8 +424,10 @@ def generate_minutes_claude_api(transcript: str, names: str, context: str,
 
 
 def generate_minutes_ollama(transcript: str, names: str, context: str,
-                            model: str, emit_callback=None) -> str:
+                            model: str, emit_callback=None,
+                            ollama_url: str = None) -> str:
     """Generate minutes using a local Ollama model."""
+    url = ollama_url or OLLAMA_URL
     if emit_callback:
         try:
             emit_callback("log", message=f"Sending transcript to Ollama ({model})...", level="info")
@@ -420,7 +436,7 @@ def generate_minutes_ollama(transcript: str, names: str, context: str,
     user_content = _build_user_content(transcript, names, context)
     print(f"  Sending transcript to Ollama ({model}) ...")
     resp = requests.post(
-        f"{OLLAMA_URL}/api/chat",
+        f"{url}/api/chat",
         json={
             "model": model,
             "stream": False,
@@ -458,14 +474,16 @@ def generate_minutes_claude_cli(transcript: str, names: str,
 def generate_minutes(transcript: str, names: str = "", context: str = "",
                      backend: str = "claude-api",
                      ollama_model: str = "",
-                     emit_callback=None) -> str:
+                     emit_callback=None,
+                     ollama_url: str = None) -> str:
     if backend == "claude-api":
         return generate_minutes_claude_api(transcript, names, context,
                                            emit_callback=emit_callback)
     elif backend == "ollama":
         return generate_minutes_ollama(transcript, names, context,
                                        ollama_model or OLLAMA_MODEL,
-                                       emit_callback=emit_callback)
+                                       emit_callback=emit_callback,
+                                       ollama_url=ollama_url)
     elif backend == "claude-cli":
         return generate_minutes_claude_cli(transcript, names, context)
     else:

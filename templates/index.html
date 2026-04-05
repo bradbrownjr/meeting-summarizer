@@ -261,6 +261,19 @@
     }
 
     /* ── Manage orgs panel ───────────────────────────────────────────────── */
+    .manage-link {
+      display: inline-block;
+      font-size: .82rem;
+      color: var(--muted);
+      cursor: pointer;
+      margin-top: .5rem;
+      background: none;
+      border: none;
+      padding: 0;
+      text-decoration: underline;
+    }
+    .manage-link:hover { color: var(--primary); }
+
     #manage-toggle {
       display: block;
       text-align: right;
@@ -480,6 +493,45 @@
     <!-- Advanced -->
     <details>
       <summary>Advanced options</summary>
+
+      <div class="field">
+        <label>Server</label>
+        <select id="server-input"></select>
+        <button id="manage-servers-toggle" type="button" class="manage-link">Manage servers</button>
+      </div>
+
+      <!-- Manage servers panel -->
+      <div id="manage-servers-panel" style="display:none;margin-bottom:1rem">
+        <div id="server-list"></div>
+        <div style="margin-top:.75rem">
+          <button class="btn btn-outline" type="button" id="add-server-btn">+ Add server</button>
+        </div>
+        <div id="server-editor" style="display:none;margin-top:1rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:1rem">
+          <h4 id="server-editor-title" style="font-size:.9rem;font-weight:700;margin-bottom:.75rem">New Server</h4>
+          <div class="field">
+            <label>Name</label>
+            <input type="text" id="sed-label" placeholder="e.g. Home Server (CPU)" />
+          </div>
+          <div class="field">
+            <label>Whisper API URL</label>
+            <input type="text" id="sed-whisper-url" placeholder="http://server:8001" />
+          </div>
+          <div class="field">
+            <label>Whisper Model <span class="hint">Leave blank to use server default</span></label>
+            <input type="text" id="sed-whisper-model" placeholder="Systran/faster-distil-whisper-large-v3" />
+          </div>
+          <div class="field">
+            <label>Ollama URL</label>
+            <input type="text" id="sed-ollama-url" placeholder="http://server:11434" />
+          </div>
+          <div class="editor-actions">
+            <button class="btn btn-primary" type="button" id="save-server-btn">Save</button>
+            <button class="btn btn-ghost" type="button" id="cancel-server-btn">Cancel</button>
+            <button class="btn btn-danger" type="button" id="delete-server-btn" style="display:none;margin-left:auto">Delete</button>
+          </div>
+        </div>
+      </div>
+
       <div class="field">
         <label>Minutes Backend</label>
         <select id="backend-input">
@@ -549,11 +601,13 @@
 
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
-let orgs         = {};       // id -> {label, short, context_template, name_template}
-let selectedOrg  = null;
-let selectedFile = null;
-let currentJobId = null;
-let editingOrgId = null;     // null = new, string = editing existing
+let orgs           = {};
+let servers        = {{ initial_servers | tojson }};
+let selectedOrg    = null;
+let selectedFile   = null;
+let currentJobId   = null;
+let editingOrgId   = null;
+let editingServerId = null;
 
 // ── Init ───────────────────────────────────────────────────────────────────
 document.getElementById("date-input").value = new Date().toISOString().slice(0, 10);
@@ -584,6 +638,8 @@ async function loadTemplateFiles() {
 
 loadOrgs();
 loadTemplateFiles();
+renderServerDropdown();
+renderServerList();
 
 // ── Org pills ──────────────────────────────────────────────────────────────
 function renderOrgPills() {
@@ -618,6 +674,112 @@ function renderOrgPills() {
     });
     grid.insertBefore(pill, grid.querySelector("#manage-toggle") || null);
   });
+}
+
+// ── Servers ────────────────────────────────────────────────────────────────
+function renderServerDropdown() {
+  const sel = document.getElementById("server-input");
+  const cur = sel.value;
+  sel.innerHTML = "";
+  Object.entries(servers).forEach(([id, s]) => {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = s.label;
+    if (id === cur) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+function renderServerList() {
+  const container = document.getElementById("server-list");
+  container.innerHTML = "";
+  Object.entries(servers).forEach(([id, s]) => {
+    const row = document.createElement("div");
+    row.className = "org-row";
+    row.innerHTML = `
+      <span class="org-row-name">${escHtml(s.label)}</span>
+      <button class="btn btn-ghost" data-edit-server="${id}">Edit</button>
+    `;
+    row.querySelector("[data-edit-server]").addEventListener("click", () => openServerEditor(id));
+    container.appendChild(row);
+  });
+}
+
+document.getElementById("manage-servers-toggle").addEventListener("click", () => {
+  const panel = document.getElementById("manage-servers-panel");
+  const open  = panel.style.display === "block";
+  panel.style.display = open ? "none" : "block";
+  document.getElementById("manage-servers-toggle").textContent = open ? "Manage servers" : "Hide";
+  if (!open) closeServerEditor();
+});
+
+document.getElementById("add-server-btn").addEventListener("click", () => openServerEditor(null));
+document.getElementById("cancel-server-btn").addEventListener("click", closeServerEditor);
+
+document.getElementById("save-server-btn").addEventListener("click", async () => {
+  const payload = {
+    label:         document.getElementById("sed-label").value.trim(),
+    whisper_url:   document.getElementById("sed-whisper-url").value.trim(),
+    whisper_model: document.getElementById("sed-whisper-model").value.trim(),
+    ollama_url:    document.getElementById("sed-ollama-url").value.trim(),
+  };
+  if (!payload.label) { alert("Name is required."); return; }
+  let resp;
+  if (editingServerId) {
+    resp = await fetch(`/api/servers/${editingServerId}`, {
+      method: "PUT", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+  } else {
+    resp = await fetch("/api/servers", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+  }
+  const data = await resp.json();
+  if (!resp.ok) { alert(data.error || "Save failed"); return; }
+  servers = data.servers;
+  renderServerDropdown();
+  renderServerList();
+  closeServerEditor();
+});
+
+document.getElementById("delete-server-btn").addEventListener("click", async () => {
+  if (!editingServerId) return;
+  if (!confirm(`Delete "${servers[editingServerId]?.label}"?`)) return;
+  const resp = await fetch(`/api/servers/${editingServerId}`, { method: "DELETE" });
+  const data = await resp.json();
+  if (!resp.ok) { alert(data.error || "Delete failed"); return; }
+  servers = data.servers;
+  renderServerDropdown();
+  renderServerList();
+  closeServerEditor();
+});
+
+function openServerEditor(id) {
+  editingServerId = id;
+  const editor = document.getElementById("server-editor");
+  editor.style.display = "block";
+  document.getElementById("server-editor-title").textContent = id ? "Edit Server" : "New Server";
+  document.getElementById("delete-server-btn").style.display = id ? "inline-flex" : "none";
+  if (id && servers[id]) {
+    const s = servers[id];
+    document.getElementById("sed-label").value         = s.label         || "";
+    document.getElementById("sed-whisper-url").value   = s.whisper_url   || "";
+    document.getElementById("sed-whisper-model").value = s.whisper_model || "";
+    document.getElementById("sed-ollama-url").value    = s.ollama_url    || "";
+  } else {
+    document.getElementById("sed-label").value         = "";
+    document.getElementById("sed-whisper-url").value   = "";
+    document.getElementById("sed-whisper-model").value = "";
+    document.getElementById("sed-ollama-url").value    = "";
+  }
+  document.getElementById("sed-label").focus();
+}
+
+function closeServerEditor() {
+  document.getElementById("server-editor").style.display = "none";
+  editingServerId = null;
 }
 
 // ── Import: server ────────────────────────────────────────────────────────
@@ -848,6 +1010,7 @@ submitBtn.addEventListener("click", async () => {
   fd.append("names",        document.getElementById("names-input").value.trim());
   fd.append("backend",      document.getElementById("backend-input").value);
   fd.append("ollama_model", document.getElementById("ollama-model-input").value.trim());
+  fd.append("server_id",    document.getElementById("server-input").value);
 
   document.getElementById("form-section").style.display     = "none";
   document.getElementById("progress-section").style.display = "block";

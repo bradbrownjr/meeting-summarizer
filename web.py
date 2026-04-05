@@ -33,6 +33,39 @@ TEMPLATES_DIR = Path(os.environ.get(
 DEFAULT_BACKEND      = os.environ.get("DEFAULT_BACKEND",      "claude-api")
 DEFAULT_OLLAMA_MODEL = os.environ.get("DEFAULT_OLLAMA_MODEL", "gemma4:e4b")
 
+SERVERS_FILE = DATA_DIR / "servers.json"
+
+
+def _default_servers() -> dict:
+    """Seed one server from the container's env vars."""
+    return {
+        "default": {
+            "label":         "Home Server",
+            "whisper_url":   os.environ.get("WHISPER_URL",   "http://localhost:8000"),
+            "whisper_model": os.environ.get("WHISPER_MODEL", "Systran/faster-distil-whisper-large-v3"),
+            "ollama_url":    os.environ.get("OLLAMA_URL",    "http://localhost:11434"),
+        }
+    }
+
+
+def load_servers() -> dict:
+    if SERVERS_FILE.exists():
+        try:
+            data = json.loads(SERVERS_FILE.read_text(encoding="utf-8"))
+            if data:
+                return data
+        except Exception:
+            pass
+    servers = _default_servers()
+    save_servers(servers)
+    return servers
+
+
+def save_servers(servers: dict):
+    SERVERS_FILE.write_text(
+        json.dumps(servers, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
 
 def load_orgs() -> dict:
     if ORGS_FILE.exists():
@@ -123,7 +156,8 @@ def _emit(job_id: str, event_type: str, **data):
 # ── Job runner ────────────────────────────────────────────────────────────────
 
 def _run_job(job_id: str, audio_path: Path, org_id: str,
-             date_str: str, names: str, backend: str, ollama_model: str):
+             date_str: str, names: str, backend: str, ollama_model: str,
+             server_id: str = "default"):
     from summarize_meeting import (
         transcribe, build_clean_transcript, generate_minutes,
         unload_whisper_model, unload_ollama_model,
@@ -138,6 +172,12 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
         _emit(job_id, "log", message=msg, level=level)
 
     cleanup: list = []
+
+    # Resolve server config
+    server = load_servers().get(server_id) or load_servers().get("default") or {}
+    _whisper_url   = server.get("whisper_url")   or None
+    _whisper_model = server.get("whisper_model") or None
+    _ollama_url    = server.get("ollama_url")    or None
 
     try:
         _emit(job_id, "status", status="transcribing")
@@ -169,10 +209,14 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
             log(f"Vocabulary hints: {combined_vocab[:120]}{'...' if len(combined_vocab) > 120 else ''}")
 
         result = transcribe(audio_path, cleanup, hotwords=combined_vocab,
-                            emit_callback=emit_cb)
+                            emit_callback=emit_cb,
+                            whisper_url=_whisper_url,
+                            whisper_model=_whisper_model)
         transcript = build_clean_transcript(audio_path, result, cleanup,
                                             hotwords=combined_vocab,
-                                            emit_callback=emit_cb)
+                                            emit_callback=emit_cb,
+                                            whisper_url=_whisper_url,
+                                            whisper_model=_whisper_model)
 
         word_count = len(transcript.split())
         log(f"Transcript complete \u2014 {word_count:,} words")
@@ -192,6 +236,7 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
             backend=backend,
             ollama_model=ollama_model or OLLAMA_MODEL,
             emit_callback=emit_cb,
+            ollama_url=_ollama_url,
         )
         _emit(job_id, "result", minutes=minutes, transcript=transcript)
         log("Done.")
@@ -202,12 +247,12 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
 
     finally:
         try:
-            unload_whisper_model(WHISPER_MODEL)
+            unload_whisper_model(WHISPER_MODEL, whisper_url=_whisper_url)
         except Exception:
             pass
         if backend == "ollama":
             try:
-                unload_ollama_model(ollama_model or OLLAMA_MODEL)
+                unload_ollama_model(ollama_model or OLLAMA_MODEL, ollama_url=_ollama_url)
             except Exception:
                 pass
         for p in cleanup:
@@ -231,6 +276,7 @@ def index():
         "index.html",
         default_backend=DEFAULT_BACKEND,
         default_ollama_model=DEFAULT_OLLAMA_MODEL,
+        initial_servers=load_servers(),
     )
 
 
@@ -286,6 +332,60 @@ def api_orgs_delete(org_id: str):
     del orgs[org_id]
     save_orgs(orgs)
     return jsonify({"ok": True, "orgs": orgs})
+
+
+# ── Server CRUD ───────────────────────────────────────────────────────────────
+
+@app.route("/api/servers", methods=["GET"])
+def api_servers_list():
+    return jsonify(load_servers())
+
+
+@app.route("/api/servers", methods=["POST"])
+def api_servers_create():
+    data = request.get_json(force=True)
+    if not data or not data.get("label", "").strip():
+        return jsonify({"error": "label is required"}), 400
+    servers = load_servers()
+    server_id = data.get("id") or _make_org_id(data["label"], servers)
+    servers[server_id] = {
+        "label":         data["label"].strip(),
+        "whisper_url":   data.get("whisper_url", "").strip(),
+        "whisper_model": data.get("whisper_model", "").strip(),
+        "ollama_url":    data.get("ollama_url", "").strip(),
+    }
+    save_servers(servers)
+    return jsonify({"ok": True, "id": server_id, "servers": servers})
+
+
+@app.route("/api/servers/<server_id>", methods=["PUT"])
+def api_servers_update(server_id: str):
+    data = request.get_json(force=True)
+    if not data or not data.get("label", "").strip():
+        return jsonify({"error": "label is required"}), 400
+    servers = load_servers()
+    if server_id not in servers:
+        return jsonify({"error": "Not found"}), 404
+    servers[server_id] = {
+        "label":         data["label"].strip(),
+        "whisper_url":   data.get("whisper_url", "").strip(),
+        "whisper_model": data.get("whisper_model", "").strip(),
+        "ollama_url":    data.get("ollama_url", "").strip(),
+    }
+    save_servers(servers)
+    return jsonify({"ok": True, "servers": servers})
+
+
+@app.route("/api/servers/<server_id>", methods=["DELETE"])
+def api_servers_delete(server_id: str):
+    servers = load_servers()
+    if server_id not in servers:
+        return jsonify({"error": "Not found"}), 404
+    if len(servers) == 1:
+        return jsonify({"error": "Cannot delete the last server"}), 400
+    del servers[server_id]
+    save_servers(servers)
+    return jsonify({"ok": True, "servers": servers})
 
 
 # ── Org import (YAML) ─────────────────────────────────────────────────────────
@@ -405,6 +505,7 @@ def api_run():
     names        = request.form.get("names", "")
     backend      = request.form.get("backend", "claude-api")
     ollama_model = request.form.get("ollama_model", "")
+    server_id    = request.form.get("server_id", "default")
 
     job_id = _new_job()
     dest = UPLOAD_DIR / job_id / Path(audio.filename).name
@@ -413,7 +514,7 @@ def api_run():
 
     threading.Thread(
         target=_run_job,
-        args=(job_id, dest, org_id, date_str, names, backend, ollama_model),
+        args=(job_id, dest, org_id, date_str, names, backend, ollama_model, server_id),
         daemon=True,
     ).start()
 
