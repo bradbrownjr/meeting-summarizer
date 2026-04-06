@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -20,6 +20,23 @@
       --muted:     #666;
       --radius:    8px;
       --shadow:    0 2px 8px rgba(0,0,0,.10);
+      --log-bg:    #1e1e1e;
+      --log-text:  #d4d4d4;
+    }
+    [data-theme="dark"] {
+      --bg:        #111;
+      --surface:   #1e1e1e;
+      --border:    #333;
+      --primary:   #52b788;
+      --primary-h: #74c69d;
+      --accent:    #52b788;
+      --danger:    #e05c4b;
+      --danger-h:  #c0392b;
+      --text:      #e8e8e8;
+      --muted:     #999;
+      --shadow:    0 2px 8px rgba(0,0,0,.4);
+      --log-bg:    #0d0d0d;
+      --log-text:  #c8c8c8;
     }
 
     body {
@@ -141,7 +158,7 @@
       background: var(--bg);
     }
     #drop-zone.over   { border-color: var(--accent); background: #e9f5ee; }
-    #drop-zone.has-file { border-color: var(--primary); background: #eaf5ee; }
+    #drop-zone.has-file { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 12%, var(--bg)); }
     #drop-zone p { color: var(--muted); font-size: .95rem; }
     #drop-zone .drop-icon { font-size: 2rem; margin-bottom: .5rem; }
     #file-name { margin-top: .5rem; font-size: .9rem; color: var(--primary); font-weight: 600; }
@@ -195,7 +212,7 @@
     #status-text { font-weight: 600; }
 
     #log-box {
-      background: #1e1e1e; color: #d4d4d4;
+      background: var(--log-bg); color: var(--log-text);
       border-radius: var(--radius);
       padding: .75rem 1rem;
       font-family: "SF Mono", Consolas, monospace;
@@ -204,6 +221,24 @@
       white-space: pre-wrap; word-break: break-word;
     }
     #log-box .log-error { color: #f48771; }
+
+    /* Theme toggle */
+    #theme-toggle {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      padding: .3rem .65rem;
+      font-size: 1rem;
+      cursor: pointer;
+      color: var(--muted);
+      transition: border-color .15s, color .15s;
+      line-height: 1;
+    }
+    #theme-toggle:hover { border-color: var(--primary); color: var(--text); }
+    header { position: relative; }
 
     /* Results */
     #result-section { display: none; }
@@ -246,7 +281,7 @@
     /* Error banner */
     #error-banner {
       display: none;
-      background: #fdf0ed; border: 1px solid var(--danger);
+      background: color-mix(in srgb, var(--danger) 10%, var(--bg)); border: 1px solid var(--danger);
       border-radius: var(--radius); padding: .9rem 1.1rem;
       color: var(--danger); font-size: .9rem;
       max-width: 720px; margin: 0 auto 1.25rem;
@@ -351,7 +386,7 @@
       display: flex; flex-wrap: wrap; gap: .35rem;
     }
     .file-chip {
-      background: #e8f4ee; color: var(--primary);
+      background: color-mix(in srgb, var(--primary) 12%, var(--bg)); color: var(--primary);
       border-radius: 4px; padding: .15rem .45rem;
     }
     #yaml-drop-zone {
@@ -371,8 +406,8 @@
       margin-top: .6rem; font-size: .82rem; border-radius: var(--radius);
       padding: .5rem .75rem;
     }
-    .import-result.ok  { background: #eaf5ee; color: var(--primary); }
-    .import-result.err { background: #fdf0ed; color: var(--danger); }
+    .import-result.ok  { background: color-mix(in srgb, var(--primary) 12%, var(--bg)); color: var(--primary); }
+    .import-result.err { background: color-mix(in srgb, var(--danger) 10%, var(--bg)); color: var(--danger); }
 
     .editor-actions {
       display: flex;
@@ -393,6 +428,7 @@
 <header>
   <h1>Meeting Summarizer</h1>
   <p>Upload a recording and get polished meeting minutes automatically.</p>
+  <button id="theme-toggle" aria-label="Toggle dark/light mode">🌙</button>
 </header>
 
 <div id="error-banner"></div>
@@ -600,6 +636,23 @@
 </div>
 
 <script>
+// ── Theme ──────────────────────────────────────────────────────────────────
+(function () {
+  const stored = localStorage.getItem("theme");
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const theme = stored || (prefersDark ? "dark" : "light");
+  document.documentElement.dataset.theme = theme;
+  document.getElementById("theme-toggle").textContent = theme === "dark" ? "☀️" : "🌙";
+})();
+
+document.getElementById("theme-toggle").addEventListener("click", () => {
+  const isDark = document.documentElement.dataset.theme === "dark";
+  const next   = isDark ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  document.getElementById("theme-toggle").textContent = next === "dark" ? "☀️" : "🌙";
+  localStorage.setItem("theme", next);
+});
+
 // ── State ──────────────────────────────────────────────────────────────────
 let orgs           = {};
 let servers        = {{ initial_servers | tojson }};
