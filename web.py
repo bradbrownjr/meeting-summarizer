@@ -120,7 +120,7 @@ def _new_job() -> str:
             "transcript": None,
             "meeting_name": "",
             "error": None,
-            "q": _queue.Queue(maxsize=500),
+            "subscribers": [],  # one Queue per active SSE connection
             "created_at": time.time(),
         }
     return job_id
@@ -143,10 +143,13 @@ def _push(job_id: str, event: dict):
     elif etype == "error":
         job["error"] = event["data"].get("message", "Unknown error")
         job["status"] = "error"
-    try:
-        job["q"].put_nowait(event)
-    except _queue.Full:
-        pass
+    with _jobs_lock:
+        subscribers = list(job["subscribers"])
+    for q in subscribers:
+        try:
+            q.put_nowait(event)
+        except _queue.Full:
+            pass
 
 
 def _emit(job_id: str, event_type: str, **data):
@@ -222,8 +225,8 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
         log(f"Transcript complete \u2014 {word_count:,} words")
 
         if backend == "transcript_only":
-            _emit(job_id, "result", minutes="", transcript=transcript)
-            log("Done (transcript only).")
+            _emit(job_id, "result", minutes="", transcript=transcript, meeting_name=meeting_name)
+            log("Done (transcript only.)")
             return
 
         _emit(job_id, "status", status="generating")
@@ -238,7 +241,7 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
             emit_callback=emit_cb,
             ollama_url=_ollama_url,
         )
-        _emit(job_id, "result", minutes=minutes, transcript=transcript)
+        _emit(job_id, "result", minutes=minutes, transcript=transcript, meeting_name=meeting_name)
         log("Done.")
 
     except Exception as exc:
@@ -521,6 +524,24 @@ def api_run():
     return jsonify({"ok": True, "job_id": job_id})
 
 
+@app.route("/api/jobs", methods=["GET"])
+def api_jobs_list():
+    """Return a summary list of all known jobs, newest first."""
+    with _jobs_lock:
+        snapshot = [
+            {
+                "job_id":       jid,
+                "status":       j["status"],
+                "meeting_name": j["meeting_name"],
+                "created_at":   j["created_at"],
+                "error":        j["error"],
+            }
+            for jid, j in _jobs.items()
+        ]
+    snapshot.sort(key=lambda x: x["created_at"], reverse=True)
+    return jsonify(snapshot)
+
+
 @app.route("/api/jobs/<job_id>/stream")
 def api_stream(job_id: str):
     with _jobs_lock:
@@ -528,18 +549,57 @@ def api_stream(job_id: str):
     if not job:
         return jsonify({"error": "Not found"}), 404
 
-    q = job["q"]
+    sub_q = _queue.Queue(maxsize=500)
+    with _jobs_lock:
+        replay_logs  = list(job["logs"])
+        curr_status  = job["status"]
+        result_md    = job["result_md"]
+        transcript   = job["transcript"]
+        meeting_name = job["meeting_name"]
+        error        = job["error"]
+        already_done = curr_status in ("done", "error")
+        if not already_done:
+            job["subscribers"].append(sub_q)
 
     def generate():
-        while True:
-            try:
-                event = q.get(timeout=30)
-            except _queue.Empty:
-                yield "event: ping\ndata: {}\n\n"
-                continue
-            yield f"data: {json.dumps(event)}\n\n"
-            if event.get("type") in ("eof", "error"):
-                break
+        try:
+            # Replay accumulated logs for late joiners
+            for msg in replay_logs:
+                ev = {"type": "log", "data": {"message": msg, "level": "info"}}
+                yield f"data: {json.dumps(ev)}\n\n"
+            # Replay current status
+            if curr_status not in ("queued", ""):
+                ev = {"type": "status", "data": {"status": curr_status}}
+                yield f"data: {json.dumps(ev)}\n\n"
+            # If job already finished, send terminal events and close
+            if already_done:
+                if result_md is not None:
+                    ev = {"type": "result", "data": {
+                        "minutes": result_md, "transcript": transcript or "",
+                        "meeting_name": meeting_name,
+                    }}
+                    yield f"data: {json.dumps(ev)}\n\n"
+                if error:
+                    ev = {"type": "error", "data": {"message": error}}
+                    yield f"data: {json.dumps(ev)}\n\n"
+                yield f"data: {json.dumps({'type': 'eof', 'data': {}})}\n\n"
+                return
+            # Stream live events from this subscriber's queue
+            while True:
+                try:
+                    event = sub_q.get(timeout=30)
+                except _queue.Empty:
+                    yield "event: ping\ndata: {}\n\n"
+                    continue
+                yield f"data: {json.dumps(event)}\n\n"
+                if event.get("type") in ("eof", "error"):
+                    break
+        finally:
+            with _jobs_lock:
+                try:
+                    job["subscribers"].remove(sub_q)
+                except ValueError:
+                    pass
 
     return Response(
         generate(),
@@ -557,6 +617,7 @@ def api_job(job_id: str):
     return jsonify({
         "status":       job["status"],
         "meeting_name": job["meeting_name"],
+        "logs":         list(job["logs"]),
         "result_md":    job["result_md"],
         "transcript":   job["transcript"],
         "error":        job["error"],

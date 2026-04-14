@@ -287,6 +287,26 @@
       max-width: 720px; margin: 0 auto 1.25rem;
     }
 
+    /* Active jobs card */
+    #active-jobs-card { display: none; }
+    .job-row {
+      display: flex;
+      align-items: center;
+      gap: .75rem;
+      padding: .55rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .job-row:last-child { border-bottom: none; }
+    .job-row-name { flex: 1; font-size: .9rem; font-weight: 600; }
+    .job-row-name small { display:block; font-size:.75rem; color:var(--muted); font-weight:400; }
+    .job-status-badge {
+      font-size: .75rem; font-weight: 700; border-radius: 100px;
+      padding: .2rem .6rem; white-space: nowrap;
+    }
+    .badge-running  { background: color-mix(in srgb, var(--primary) 15%, var(--bg)); color: var(--primary); }
+    .badge-done     { background: color-mix(in srgb, #2ecc71 15%, var(--bg));        color: #1a8a4a; }
+    .badge-error    { background: color-mix(in srgb, var(--danger) 12%, var(--bg));  color: var(--danger); }
+
     /* Reset */
     #reset-btn {
       display: block; margin: .75rem auto 0;
@@ -373,22 +393,6 @@
       font-size: .95rem; font-weight: 700;
       color: var(--primary); margin-bottom: .75rem;
     }
-    #import-server-box {
-      background: var(--bg); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: .85rem 1rem;
-      margin-bottom: .75rem;
-    }
-    #import-server-box p { font-size: .85rem; color: var(--muted); margin-bottom: .6rem; }
-    #import-server-files {
-      font-size: .8rem; color: var(--muted);
-      font-family: "SF Mono", Consolas, monospace;
-      margin-bottom: .6rem;
-      display: flex; flex-wrap: wrap; gap: .35rem;
-    }
-    .file-chip {
-      background: color-mix(in srgb, var(--primary) 12%, var(--bg)); color: var(--primary);
-      border-radius: 4px; padding: .15rem .45rem;
-    }
     #yaml-drop-zone {
       border: 2px dashed var(--border);
       border-radius: var(--radius);
@@ -433,6 +437,12 @@
 
 <div id="error-banner"></div>
 
+<!-- Active jobs -->
+<div class="card" id="active-jobs-card">
+  <h2>&#128336; Active &amp; Recent Jobs</h2>
+  <div id="active-jobs-list"></div>
+</div>
+
 <!-- Form -->
 <div id="form-section">
   <div class="card">
@@ -459,16 +469,6 @@
       <!-- Import section -->
       <div id="import-section">
         <h3>Import from YAML</h3>
-
-        <!-- Server-side import -->
-        <div id="import-server-box">
-          <p>Import all <code>.yaml</code> files from the server's templates directory:</p>
-          <div id="import-server-files"></div>
-          <button class="btn btn-outline" type="button" id="import-server-btn">
-            &#8659; Import from server
-          </button>
-          <div id="import-server-result"></div>
-        </div>
 
         <!-- Upload a YAML file -->
         <div id="yaml-drop-zone" role="button" tabindex="0"
@@ -608,6 +608,10 @@
       <span id="status-text">Starting&hellip;</span>
     </div>
     <div id="log-box"></div>
+    <p id="share-hint" style="margin-top:.85rem;font-size:.82rem;color:var(--muted);display:none">
+      Share progress with others:
+      <a id="share-url" href="" style="color:var(--primary);word-break:break-all;font-family:'SF Mono',Consolas,monospace"></a>
+    </p>
   </div>
 </div>
 
@@ -672,25 +676,7 @@ async function loadOrgs() {
   renderOrgList();
 }
 
-async function loadTemplateFiles() {
-  try {
-    const r = await fetch("/api/orgs/templates");
-    const data = await r.json();
-    const box = document.getElementById("import-server-files");
-    if (!data.exists || data.files.length === 0) {
-      box.innerHTML = `<span style="font-style:italic">No .yaml files found in <code>${escHtml(data.dir)}</code></span>`;
-      document.getElementById("import-server-btn").disabled = true;
-    } else {
-      box.innerHTML = data.files.map(f => `<span class="file-chip">${escHtml(f)}</span>`).join("");
-      document.getElementById("import-server-btn").disabled = false;
-    }
-  } catch {
-    document.getElementById("import-server-files").textContent = "Could not reach server.";
-  }
-}
-
 loadOrgs();
-loadTemplateFiles();
 renderServerDropdown();
 renderServerList();
 
@@ -834,35 +820,6 @@ function closeServerEditor() {
   document.getElementById("server-editor").style.display = "none";
   editingServerId = null;
 }
-
-// ── Import: server ────────────────────────────────────────────────────────
-document.getElementById("import-server-btn").addEventListener("click", async () => {
-  const btn = document.getElementById("import-server-btn");
-  btn.disabled = true;
-  btn.textContent = "Importing\u2026";
-  const resultEl = document.getElementById("import-server-result");
-  resultEl.innerHTML = "";
-  try {
-    const r = await fetch("/api/orgs/import/server", { method: "POST" });
-    const data = await r.json();
-    if (!r.ok) {
-      showImportResult(resultEl, false, data.error || "Import failed");
-    } else {
-      orgs = data.orgs;
-      renderOrgPills();
-      renderOrgList();
-      await loadTemplateFiles();
-      const msg = data.imported.length
-        ? `Imported: ${data.imported.join(", ")}` + (data.errors.length ? `\nWarnings: ${data.errors.join("; ")}` : "")
-        : (data.errors.length ? `Errors: ${data.errors.join("; ")}` : "Nothing imported.");
-      showImportResult(resultEl, data.imported.length > 0, msg);
-    }
-  } catch (err) {
-    showImportResult(resultEl, false, `Request failed: ${err.message}`);
-  }
-  btn.disabled = false;
-  btn.textContent = "\u2659 Import from server";
-});
 
 // ── Import: upload ────────────────────────────────────────────────────────
 const yamlDrop  = document.getElementById("yaml-drop-zone");
@@ -1080,6 +1037,14 @@ submitBtn.addEventListener("click", async () => {
   if (!json.ok) { showFormError(json.error || "Server error"); return; }
 
   currentJobId = json.job_id;
+  const shareHref = window.location.origin + window.location.pathname + '?job=' + currentJobId;
+  history.pushState({jobId: currentJobId}, '', '?job=' + currentJobId);
+  const shareHint = document.getElementById('share-hint');
+  const shareLink = document.getElementById('share-url');
+  shareLink.href = shareHref;
+  shareLink.textContent = shareHref;
+  shareHint.style.display = 'block';
+  stopJobsPolling();
   listenSSE(currentJobId);
 });
 
@@ -1098,7 +1063,7 @@ function listenSSE(jobId) {
       else if (s === "generating")   setStatus("Generating minutes\u2026");
     } else if (evt.type === "result") {
       es.close();
-      showResults(jobId, evt.data.minutes, evt.data.transcript);
+      showResults(jobId, evt.data.minutes, evt.data.transcript, evt.data.meeting_name);
     } else if (evt.type === "error") {
       es.close();
       showFormError(evt.data.message || "An error occurred.");
@@ -1111,7 +1076,7 @@ function listenSSE(jobId) {
     fetch(`/api/jobs/${jobId}`)
       .then(r => r.json())
       .then(j => {
-        if (j.status === "done")  showResults(jobId, j.result_md, j.transcript);
+        if (j.status === "done")  showResults(jobId, j.result_md, j.transcript, j.meeting_name);
         else if (j.status === "error") showFormError(j.error || "Unknown error");
       });
   };
@@ -1129,9 +1094,12 @@ function appendLog(msg, level) {
 function setStatus(msg) { document.getElementById("status-text").textContent = msg; }
 
 // ── Results ────────────────────────────────────────────────────────────────
-function showResults(jobId, minutes, transcript) {
+function showResults(jobId, minutes, transcript, meetingName) {
   document.getElementById("progress-section").style.display = "none";
   document.getElementById("result-section").style.display   = "block";
+  const title = meetingName ? `\u2705 ${meetingName}` : "\u2705 Results";
+  document.getElementById("result-title").textContent = title;
+  document.title = meetingName ? `${meetingName} \u2014 Meeting Summarizer` : "Meeting Summarizer";
   document.getElementById("minutes-text").textContent    = minutes    || "(no minutes generated)";
   document.getElementById("transcript-text").textContent = transcript || "(no transcript available)";
   if (!minutes && transcript) activateTab("transcript");
@@ -1162,8 +1130,14 @@ document.getElementById("reset-btn").addEventListener("click", () => {
   document.getElementById("result-section").style.display   = "none";
   document.getElementById("manage-panel").style.display     = "none";
   document.getElementById("manage-toggle").textContent      = "Manage committees";
+  document.getElementById("share-hint").style.display       = "none";
+  document.getElementById("result-title").textContent       = "\u2705 Results";
+  document.title = "Meeting Summarizer";
+  history.pushState({}, '', window.location.pathname);
   showError("");
   closeEditor();
+  stopJobsPolling();
+  refreshActiveJobs();
 });
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -1180,6 +1154,98 @@ function showFormError(msg) {
 function escHtml(s) {
   return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
+
+// ── Active jobs card ───────────────────────────────────────────────────────
+let _jobsPollTimer = null;
+
+async function refreshActiveJobs() {
+  let jobs;
+  try {
+    const r = await fetch("/api/jobs");
+    if (!r.ok) return;
+    jobs = await r.json();
+  } catch { return; }
+
+  const card = document.getElementById("active-jobs-card");
+  const list = document.getElementById("active-jobs-list");
+
+  // Only show jobs from the last 24 h
+  const cutoff = Date.now() / 1000 - 86400;
+  jobs = jobs.filter(j => j.created_at > cutoff);
+
+  if (jobs.length === 0) {
+    card.style.display = "none";
+    stopJobsPolling();
+    return;
+  }
+
+  card.style.display = "block";
+  list.innerHTML = "";
+  jobs.forEach(j => {
+    const isRunning = j.status !== "done" && j.status !== "error";
+    const badgeClass = j.status === "done" ? "badge-done"
+                     : j.status === "error" ? "badge-error"
+                     : "badge-running";
+    const badgeLabel = j.status === "done"  ? "Done"
+                     : j.status === "error" ? "Error"
+                     : j.status === "transcribing" ? "Transcribing\u2026"
+                     : j.status === "generating"   ? "Generating\u2026"
+                     : "Queued";
+    const name = j.meeting_name || "Unnamed job";
+    const ago  = _timeAgo(j.created_at);
+
+    const row = document.createElement("div");
+    row.className = "job-row";
+    row.innerHTML = `
+      <span class="job-row-name">${escHtml(name)}<small>${escHtml(ago)}</small></span>
+      <span class="job-status-badge ${badgeClass}">${badgeLabel}</span>
+      <a class="btn btn-outline" href="?job=${encodeURIComponent(j.job_id)}"
+         style="padding:.35rem .8rem;font-size:.82rem">View</a>
+    `;
+    list.appendChild(row);
+  });
+
+  // Keep polling while any job is still running
+  const anyRunning = jobs.some(j => j.status !== "done" && j.status !== "error");
+  if (anyRunning && !_jobsPollTimer) {
+    _jobsPollTimer = setInterval(refreshActiveJobs, 5000);
+  } else if (!anyRunning) {
+    stopJobsPolling();
+  }
+}
+
+function stopJobsPolling() {
+  if (_jobsPollTimer) { clearInterval(_jobsPollTimer); _jobsPollTimer = null; }
+}
+
+function _timeAgo(ts) {
+  const sec = Math.round(Date.now() / 1000 - ts);
+  if (sec < 5)   return "just now";
+  if (sec < 60)  return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec/60)}m ago`;
+  return `${Math.floor(sec/3600)}h ago`;
+}
+
+// Kick off on page load (only when showing the form, not when resuming a job)
+if (!new URLSearchParams(window.location.search).get("job")) {
+  refreshActiveJobs();
+}
+
+// ── Reconnect to a job from URL (?job=<id>) ────────────────────────────────
+(function () {
+  const jobId = new URLSearchParams(window.location.search).get("job");
+  if (!jobId) return;
+  currentJobId = jobId;
+  document.getElementById("form-section").style.display     = "none";
+  document.getElementById("progress-section").style.display = "block";
+  const shareHref = window.location.href;
+  const shareLink = document.getElementById("share-url");
+  shareLink.href        = shareHref;
+  shareLink.textContent = shareHref;
+  document.getElementById("share-hint").style.display = "block";
+  setStatus("Connecting\u2026");
+  listenSSE(jobId);
+})();
 </script>
 </body>
 </html>
