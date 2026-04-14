@@ -1,0 +1,17 @@
+services:
+  meeting-summarizer:
+    image: ghcr.io/bradbrownjr/meeting-summarizer:latest
+    container_name: meeting-summarizer
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    volumes:
+      - /mnt/user/appdata/meeting-summarizer/hf-cache:/root/.cache/huggingface
+      - /mnt/user/appdata/meeting-summarizer/data:/data
+      - /mnt/user/appdata/meeting-summarizer/templates:/templates
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - UPLOAD_DIR=/tmp/meeting_uploads
+      - DATA_DIR=/data
+      - TEMPLATES_DIR=/templates
+      - WEB_PORT=8082
