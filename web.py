@@ -321,6 +321,8 @@ def _serializable_job(job_id: str, job: dict) -> dict:
         "associated_files": job.get("associated_files", []),
         "progress": job.get("progress", _default_progress(job.get("status", "queued"))),
         "audio_duration_sec": job.get("audio_duration_sec"),
+        "org_id": job.get("org_id", ""),
+        "names": job.get("names", ""),
     }
 
 
@@ -391,6 +393,8 @@ def _load_persisted_jobs():
             "associated_files": data.get("associated_files", []),
             "audio_duration_sec": data.get("audio_duration_sec"),
             "progress": data.get("progress") or _default_progress(data.get("status", "queued")),
+            "org_id": data.get("org_id", ""),
+            "names": data.get("names", ""),
         })
         if job["minutes_file"]:
             job["result_md"] = _read_job_artifact(job_id, job["minutes_file"])
@@ -522,6 +526,7 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
     cancel_event = _jobs[job_id]["cancel_event"]
     from summarize_meeting import (
         transcribe, build_clean_transcript, generate_minutes,
+        correct_transcript, convert_to_mp3,
         unload_whisper_model, unload_ollama_model,
         WHISPER_MODEL, OLLAMA_MODEL,
     )
@@ -576,6 +581,8 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
             meeting_name = org.get("name_template", "Meeting \u2013 {month_year}")
         with _jobs_lock:
             _jobs[job_id]["meeting_name"] = meeting_name
+            _jobs[job_id]["org_id"] = org_id
+            _jobs[job_id]["names"] = names
 
         audio_duration = _probe_audio_duration_seconds(audio_path)
         with _jobs_lock:
@@ -605,6 +612,12 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
         if combined_vocab:
             log(f"Vocabulary hints: {combined_vocab[:120]}{'...' if len(combined_vocab) > 120 else ''}")
 
+        # Pre-convert to MP3 — many Whisper ASR Box deployments reject m4a/ogg
+        # containers outright, wasting ~30s on failed probe + retry cycles.
+        if audio_path.suffix.lower() not in (".mp3", ".wav"):
+            log(f"Converting {audio_path.name} → MP3 for Whisper compatibility...")
+            audio_path = convert_to_mp3(audio_path, cleanup)
+
         result = transcribe(audio_path, cleanup, hotwords=combined_vocab,
                             emit_callback=emit_cb,
                             whisper_url=_whisper_url,
@@ -625,6 +638,32 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
             progress(100, "Complete", detail="Transcript generated", phase="done")
             log("Done (transcript only.)")
             return
+
+        # ── Transcript correction pass ──────────────────────────────────
+        # The Whisper ASR Box often cannot accept vocabulary hints, so
+        # proper nouns (names, terms) may be misspelled in the raw
+        # transcript.  Run a lightweight LLM pass to fix them using the
+        # roster, org vocabulary, and attendee names before generating
+        # minutes.
+        if combined_vocab or org_roster:
+            progress(91, "Correcting transcript", detail="Fixing proper nouns", phase="correcting")
+            transcript = correct_transcript(
+                transcript,
+                names=names,
+                roster=org_roster,
+                vocabulary=org_vocab,
+                backend=backend,
+                ollama_model=_ollama_model or OLLAMA_MODEL,
+                ollama_url=_ollama_url,
+                emit_callback=emit_cb,
+                cancel_event=cancel_event,
+            )
+            if cancel_event.is_set():
+                log("Job cancelled.")
+                return
+            word_count_corrected = len(transcript.split())
+            if word_count_corrected != word_count:
+                log(f"Corrected transcript: {word_count_corrected:,} words (was {word_count:,})")
 
         _emit(job_id, "status", status="generating")
         progress(93, "Generating minutes", detail="Drafting summary", phase="generating")
@@ -691,7 +730,10 @@ def _run_job_resume(job_id: str, transcript: str, server_id: str = "default",
                     backend: str = "ollama"):
     """Re-run only the minutes generation step for a job whose transcript is already saved."""
     cancel_event = _jobs[job_id]["cancel_event"]
-    from summarize_meeting import generate_minutes, unload_ollama_model, OLLAMA_MODEL
+    from summarize_meeting import (
+        generate_minutes, correct_transcript,
+        unload_ollama_model, OLLAMA_MODEL,
+    )
 
     server   = load_servers().get(server_id, {})
     _ollama_model = server.get("ollama_model") or None
@@ -711,34 +753,57 @@ def _run_job_resume(job_id: str, transcript: str, server_id: str = "default",
         job = _jobs[job_id]
         job["status"] = "generating"
     _emit(job_id, "status", status="generating")
-    progress(93, "Generating minutes", detail="Drafting summary", phase="generating")
+    progress(90, "Resuming", detail="Preparing transcript correction", phase="correcting")
     log("Resuming: generating minutes from saved transcript…")
 
     meeting_name = job.get("meeting_name", "")
-    with _jobs_lock:
-        job = _jobs[job_id]
 
-    # Reload org context from metadata if available
+    # Reload org context so correction and generation passes have roster/names
     try:
         meta = json.loads(_job_metadata_path(job_id).read_text(encoding="utf-8"))
     except Exception:
         meta = {}
+    org_id = meta.get("org_id", "")
+    org = load_orgs().get(org_id, {}) if org_id else {}
+    org_roster = org.get("roster", "")
+    org_vocab  = org.get("vocabulary", "")
+    names      = meta.get("names", "")
 
     try:
         if cancel_event.is_set():
             log("Job cancelled.")
             return
 
+        # Run transcript correction pass if roster/vocab is available
+        if org_vocab or org_roster or names:
+            progress(91, "Correcting transcript", detail="Fixing proper nouns", phase="correcting")
+            transcript = correct_transcript(
+                transcript,
+                names=names,
+                roster=org_roster,
+                vocabulary=org_vocab,
+                backend=backend,
+                ollama_model=_ollama_model or OLLAMA_MODEL,
+                ollama_url=_ollama_url,
+                emit_callback=emit_cb,
+                cancel_event=cancel_event,
+            )
+            if cancel_event.is_set():
+                log("Job cancelled.")
+                return
+
+        progress(93, "Generating minutes", detail="Drafting summary", phase="generating")
+
         minutes = generate_minutes(
             transcript,
-            names="",
+            names=names,
             context="",
             backend=backend,
             ollama_model=_ollama_model or OLLAMA_MODEL,
             emit_callback=emit_cb,
             ollama_url=_ollama_url,
             associated_context="",
-            roster="",
+            roster=org_roster,
             cancel_event=cancel_event,
         )
 

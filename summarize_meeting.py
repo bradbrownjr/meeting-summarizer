@@ -110,6 +110,10 @@ organize the important information.
 - Use professional, neutral language throughout.
 - When speaker identity is unclear, omit the name rather than guess.
 - Do not invent information not present in the transcript.
+- At the very end of the document, add a horizontal rule and then this \
+disclaimer in italics: \
+"*These minutes were auto-generated from audio transcription and should \
+be reviewed for accuracy before formal approval.*"
 """
 
 
@@ -515,6 +519,156 @@ def build_clean_transcript(audio_path: Path, result: dict,
 
 
 # ── Minutes generation ──────────────────────────────────────────────────────────
+
+TRANSCRIPT_CORRECTION_PROMPT = """\
+You are a transcript editor. You will receive a raw meeting transcript and a \
+list of known participant names, vocabulary terms, and optionally a member \
+roster. Your ONLY job is to correct misspelled or misheard proper nouns \
+(people's names, organisation names, technical terms) to match the known \
+vocabulary provided.
+
+Rules:
+- Fix only spelling of proper nouns. Do NOT rephrase, summarize, restructure, \
+or change any other words.
+- If a word sounds like a known name but is misspelled (e.g. "Amy Braun" → \
+"Amy Brown"), correct it.
+- If you are not confident a word is a misspelling, leave it unchanged.
+- Preserve all original punctuation, spacing, and sentence structure exactly.
+- Return ONLY the corrected transcript text, nothing else — no commentary, \
+no preamble, no markdown formatting.
+"""
+
+
+def correct_transcript(transcript: str, names: str = "", roster: str = "",
+                       vocabulary: str = "",
+                       backend: str = "ollama",
+                       ollama_model: str = "",
+                       ollama_url: str = None,
+                       emit_callback=None,
+                       cancel_event=None) -> str:
+    """Run a lightweight LLM pass to fix proper-noun misspellings in the transcript."""
+    known_parts = []
+    if names:
+        known_parts.append(f"Known attendee names: {names}")
+    if roster:
+        known_parts.append(f"Member roster:\n{roster}")
+    if vocabulary:
+        known_parts.append(f"Vocabulary / terms: {vocabulary}")
+    if not known_parts:
+        return transcript  # nothing to correct against
+
+    user_content = "\n\n".join(known_parts) + "\n\n--- TRANSCRIPT ---\n\n" + transcript
+
+    if backend == "ollama":
+        url = ollama_url or OLLAMA_URL
+        model = ollama_model or OLLAMA_MODEL
+        if emit_callback:
+            try:
+                emit_callback("log",
+                              message=f"Running transcript correction pass ({model})...",
+                              level="info")
+            except Exception:
+                pass
+
+        resp = requests.post(
+            f"{url}/api/chat",
+            json={
+                "model": model,
+                "stream": True,
+                "messages": [
+                    {"role": "system", "content": TRANSCRIPT_CORRECTION_PROMPT},
+                    {"role": "user",   "content": user_content},
+                ],
+            },
+            stream=True,
+            timeout=3600,
+        )
+        if resp.status_code != 200:
+            msg = f"Transcript correction failed ({resp.status_code}) — using uncorrected transcript."
+            print(f"  {msg}")
+            if emit_callback:
+                try:
+                    emit_callback("log", message=msg, level="warn")
+                except Exception:
+                    pass
+            return transcript
+
+        chunks: list[str] = []
+        for line in resp.iter_lines():
+            if cancel_event and cancel_event.is_set():
+                resp.close()
+                return transcript
+            if not line:
+                continue
+            try:
+                chunk = json.loads(line)
+            except Exception:
+                continue
+            content = chunk.get("message", {}).get("content", "")
+            if content:
+                chunks.append(content)
+            if chunk.get("done"):
+                break
+        corrected = "".join(chunks).strip()
+        # Sanity check: if the LLM returned something wildly different in length,
+        # it probably didn't follow instructions — fall back to original.
+        if not corrected or abs(len(corrected) - len(transcript)) / max(len(transcript), 1) > 0.20:
+            msg = "Transcript correction returned unexpected output — using original transcript."
+            print(f"  {msg}")
+            if emit_callback:
+                try:
+                    emit_callback("log", message=msg, level="warn")
+                except Exception:
+                    pass
+            return transcript
+        if emit_callback:
+            try:
+                emit_callback("log",
+                              message="Transcript correction complete.",
+                              level="info")
+            except Exception:
+                pass
+        return corrected
+
+    elif backend == "claude-api":
+        try:
+            import anthropic
+            client = anthropic.Anthropic()
+            if emit_callback:
+                try:
+                    emit_callback("log",
+                                  message=f"Running transcript correction pass ({CLAUDE_MODEL})...",
+                                  level="info")
+                except Exception:
+                    pass
+            message = client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=8192,
+                system=TRANSCRIPT_CORRECTION_PROMPT,
+                messages=[{"role": "user", "content": user_content}],
+            )
+            corrected = message.content[0].text.strip()
+            if not corrected or abs(len(corrected) - len(transcript)) / max(len(transcript), 1) > 0.20:
+                return transcript
+            if emit_callback:
+                try:
+                    emit_callback("log", message="Transcript correction complete.", level="info")
+                except Exception:
+                    pass
+            return corrected
+        except Exception as exc:
+            msg = f"Transcript correction failed ({exc}) — using uncorrected transcript."
+            print(f"  {msg}")
+            if emit_callback:
+                try:
+                    emit_callback("log", message=msg, level="warn")
+                except Exception:
+                    pass
+            return transcript
+
+    # Unsupported backend — skip correction
+    return transcript
+
 
 def _build_user_content(transcript: str, names: str, context: str,
                         associated_context: str = "", roster: str = "") -> str:
