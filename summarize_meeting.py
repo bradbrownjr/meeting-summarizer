@@ -750,11 +750,32 @@ def generate_minutes_ollama(transcript: str, names: str, context: str,
         _log(f"Ollama model '{model}' not found — pulling now (this may take several minutes) ...")
         pull = requests.post(
             f"{url}/api/pull",
-            json={"name": model, "stream": False},
+            json={"name": model, "stream": True},
+            stream=True,
             timeout=1800,
         )
         if pull.status_code != 200:
             raise RuntimeError(f"Ollama pull failed ({pull.status_code}):\n{pull.text[:300]}")
+        last_status = ""
+        for pull_line in pull.iter_lines():
+            if not pull_line:
+                continue
+            try:
+                pull_event = json.loads(pull_line)
+            except Exception:
+                continue
+            status = pull_event.get("status", "")
+            completed = pull_event.get("completed")
+            total = pull_event.get("total")
+            if completed and total and total > 0:
+                pct = completed / total * 100
+                msg = f"  Pulling '{model}': {status} — {pct:.1f}% ({completed // 1_048_576} / {total // 1_048_576} MB)"
+            elif status and status != last_status:
+                msg = f"  Pulling '{model}': {status}"
+            else:
+                continue
+            last_status = status
+            _log(msg)
         _log(f"Ollama model '{model}' downloaded and ready. Retrying generation ...")
         resp = requests.post(
             f"{url}/api/chat",
