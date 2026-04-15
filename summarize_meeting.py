@@ -59,7 +59,7 @@ WHISPER_URL  = os.getenv("WHISPER_URL", "http://localhost:8000")
 OLLAMA_URL    = os.getenv("OLLAMA_URL",   "http://localhost:11434")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "Systran/faster-distil-whisper-large-v3")
 CLAUDE_MODEL  = os.getenv("CLAUDE_MODEL",  "claude-sonnet-4-6")
-OLLAMA_MODEL  = os.getenv("OLLAMA_MODEL",  "gemma4:e4b")
+OLLAMA_MODEL  = os.getenv("OLLAMA_MODEL",  "qwen3.5:9b")
 
 # Hallucination detection — sliding window across consecutive segments
 WINDOW_SIZE        = 20    # segments to check at once
@@ -71,6 +71,14 @@ AVG_LOGPROB_THRESHOLD       = -1.0
 
 # How far before the first bad segment to start the retry clip (for context)
 RETRY_OVERLAP_SECONDS = 30.0
+
+# Seconds to wait before retrying after a server-busy (5xx) response.
+# Whisper ASR Box may still be releasing GPU memory when a retry arrives.
+ASR_RETRY_BACKOFF_SECONDS = 8
+
+# Cache discovered transcription endpoint behavior per Whisper base URL.
+# Example: {"http://whisper:9000": {"mode": "asr", "include_prompt": False, "minimal": False}}
+TRANSCRIBE_MODE_HINTS = {}
 
 
 SYSTEM_PROMPT = """\
@@ -265,29 +273,77 @@ def transcribe(audio_path: Path, cleanup: list,
 
     size_kb = audio_path.stat().st_size // 1024
     _log(f"Sending {audio_path.name} ({size_kb:,} KB) to Whisper API ({model})...")
-    _log("Checking transcription endpoint: OpenAI-compatible /v1/audio/transcriptions ...")
+    hint = TRANSCRIBE_MODE_HINTS.get(url)
+    if hint:
+        if hint.get("mode") == "openai":
+            _log("Using cached transcription endpoint: OpenAI-compatible /v1/audio/transcriptions.")
+            resp = _transcribe_openai_compatible(audio_path, url, model, prompt, hotwords)
+        else:
+            include_prompt = hint.get("include_prompt", True)
+            minimal = hint.get("minimal", False)
+            cached_mode = "minimal mode" if minimal else (
+                "without initial_prompt" if not include_prompt else "standard"
+            )
+            _log(f"Using cached transcription endpoint: Whisper ASR Box /asr ({cached_mode}).")
+            resp = _transcribe_asr_webservice(
+                audio_path,
+                url,
+                prompt,
+                hotwords,
+                include_prompt=include_prompt,
+                minimal=minimal,
+            )
 
-    resp = _transcribe_openai_compatible(audio_path, url, model, prompt, hotwords)
+        # If a cached mode no longer works, clear and re-probe once below.
+        if resp.status_code in (404, 405) or resp.status_code >= 500:
+            _log(f"Cached transcription endpoint failed ({resp.status_code}); waiting {ASR_RETRY_BACKOFF_SECONDS}s then re-checking endpoint compatibility ...")
+            import time as _time; _time.sleep(ASR_RETRY_BACKOFF_SECONDS)
+            TRANSCRIBE_MODE_HINTS.pop(url, None)
+            hint = None
 
-    if resp.status_code == 200:
-        _log("OpenAI-compatible transcription endpoint: connected.")
+    if not hint:
+        _log("Checking transcription endpoint: OpenAI-compatible /v1/audio/transcriptions ...")
+        resp = _transcribe_openai_compatible(audio_path, url, model, prompt, hotwords)
 
-    if resp.status_code == 404:
-        _log("OpenAI-compatible transcription endpoint: not found.")
-        _log("Checking transcription endpoint: Whisper ASR Box /asr compatibility mode ...")
-        resp = _transcribe_asr_webservice(audio_path, url, prompt, hotwords, include_prompt=True, minimal=False)
         if resp.status_code == 200:
-            _log("Whisper ASR Box transcription endpoint: connected.")
-        elif resp.status_code >= 500:
-            _log("Whisper ASR Box /asr returned server error; retrying without initial_prompt ...")
-            resp = _transcribe_asr_webservice(audio_path, url, prompt, hotwords, include_prompt=False, minimal=False)
+            _log("OpenAI-compatible transcription endpoint: connected.")
+            TRANSCRIBE_MODE_HINTS[url] = {"mode": "openai"}
+
+        if resp.status_code == 404:
+            _log("OpenAI-compatible transcription endpoint: not found.")
+            _log("Checking transcription endpoint: Whisper ASR Box /asr compatibility mode ...")
+            resp = _transcribe_asr_webservice(audio_path, url, prompt, hotwords, include_prompt=True, minimal=False)
             if resp.status_code == 200:
-                _log("Whisper ASR Box transcription endpoint: connected (without initial_prompt).")
+                _log("Whisper ASR Box transcription endpoint: connected.")
+                TRANSCRIBE_MODE_HINTS[url] = {
+                    "mode": "asr",
+                    "include_prompt": True,
+                    "minimal": False,
+                }
             elif resp.status_code >= 500:
-                _log("Whisper ASR Box /asr still failing; retrying with minimal query parameters ...")
-                resp = _transcribe_asr_webservice(audio_path, url, prompt, hotwords, include_prompt=False, minimal=True)
+                _log(f"Whisper ASR Box /asr returned server error ({resp.status_code}); waiting {ASR_RETRY_BACKOFF_SECONDS}s then retrying without initial_prompt ...")
+                import time as _time; _time.sleep(ASR_RETRY_BACKOFF_SECONDS)
+                resp = _transcribe_asr_webservice(audio_path, url, prompt, hotwords, include_prompt=False, minimal=False)
                 if resp.status_code == 200:
-                    _log("Whisper ASR Box transcription endpoint: connected (minimal mode).")
+                    _log("Whisper ASR Box transcription endpoint: connected (without initial_prompt).")
+                    _log("Note: vocabulary/context hints cannot be passed to this endpoint — transcription accuracy may be reduced.")
+                    TRANSCRIBE_MODE_HINTS[url] = {
+                        "mode": "asr",
+                        "include_prompt": False,
+                        "minimal": False,
+                    }
+                elif resp.status_code >= 500:
+                    _log(f"Whisper ASR Box /asr still failing ({resp.status_code}); waiting {ASR_RETRY_BACKOFF_SECONDS}s then retrying with minimal query parameters ...")
+                    _time.sleep(ASR_RETRY_BACKOFF_SECONDS)
+                    resp = _transcribe_asr_webservice(audio_path, url, prompt, hotwords, include_prompt=False, minimal=True)
+                    if resp.status_code == 200:
+                        _log("Whisper ASR Box transcription endpoint: connected (minimal mode).")
+                        _log("Note: vocabulary/context hints cannot be passed to this endpoint — transcription accuracy may be reduced.")
+                        TRANSCRIBE_MODE_HINTS[url] = {
+                            "mode": "asr",
+                            "include_prompt": False,
+                            "minimal": True,
+                        }
 
     if resp.status_code == 404 and "not installed" in resp.text.lower():
         ensure_model_downloaded(model, whisper_url=url)

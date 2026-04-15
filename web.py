@@ -12,6 +12,7 @@ import re
 import requests
 import shutil
 import socket
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -64,7 +65,7 @@ if not _env_backend:
     # Auto-detect: prefer ollama if no Claude API key is configured
     _env_backend = "claude-api" if os.environ.get("ANTHROPIC_API_KEY") else "ollama"
 DEFAULT_BACKEND      = _env_backend
-DEFAULT_OLLAMA_MODEL = os.environ.get("DEFAULT_OLLAMA_MODEL", "gemma4:e4b")
+DEFAULT_OLLAMA_MODEL = os.environ.get("DEFAULT_OLLAMA_MODEL", "qwen3.5:9b")
 
 SERVERS_FILE = DATA_DIR / "servers.json"
 
@@ -254,6 +255,54 @@ def _job_associated_dir(job_id: str) -> Path:
     return _job_dir(job_id) / "associated"
 
 
+def _default_progress(status: str = "queued") -> dict:
+    label = {
+        "queued": "Waiting in queue",
+        "transcribing": "Transcribing audio",
+        "generating": "Generating minutes",
+        "done": "Complete",
+        "error": "Failed",
+        "cancelled": "Cancelled",
+    }.get(status, "Processing")
+    percent = {
+        "queued": 0,
+        "transcribing": 8,
+        "generating": 92,
+        "done": 100,
+        "error": 100,
+        "cancelled": 100,
+    }.get(status, 0)
+    return {
+        "phase": status,
+        "percent": percent,
+        "label": label,
+        "detail": "",
+    }
+
+
+def _probe_audio_duration_seconds(path: Path) -> float | None:
+    """Return audio duration in seconds using ffprobe, or None if unavailable."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        value = float((result.stdout or "").strip())
+        if value > 0:
+            return value
+    except Exception:
+        return None
+    return None
+
+
 def _serializable_job(job_id: str, job: dict) -> dict:
     return {
         "job_id": job_id,
@@ -266,6 +315,8 @@ def _serializable_job(job_id: str, job: dict) -> dict:
         "minutes_file": job.get("minutes_file"),
         "transcript_file": job.get("transcript_file"),
         "associated_files": job.get("associated_files", []),
+        "progress": job.get("progress", _default_progress(job.get("status", "queued"))),
+        "audio_duration_sec": job.get("audio_duration_sec"),
     }
 
 
@@ -307,6 +358,8 @@ def _new_runtime_job(created_at: float | None = None) -> dict:
         "minutes_file": None,
         "transcript_file": None,
         "associated_files": [],
+        "audio_duration_sec": None,
+        "progress": _default_progress("queued"),
     }
 
 
@@ -327,6 +380,8 @@ def _load_persisted_jobs():
             "minutes_file": data.get("minutes_file"),
             "transcript_file": data.get("transcript_file"),
             "associated_files": data.get("associated_files", []),
+            "audio_duration_sec": data.get("audio_duration_sec"),
+            "progress": data.get("progress") or _default_progress(data.get("status", "queued")),
         })
         if job["minutes_file"]:
             job["result_md"] = _read_job_artifact(job_id, job["minutes_file"])
@@ -337,6 +392,7 @@ def _load_persisted_jobs():
             job["status"] = "error"
             job["error"] = message
             job["logs"].append(message)
+            job["progress"] = _default_progress("error")
         with _jobs_lock:
             _jobs[job_id] = job
         _persist_job(job_id)
@@ -373,9 +429,49 @@ def _push(job_id: str, event: dict):
         return
     etype = event.get("type")
     if etype == "log":
-        job["logs"].append(event.get("data", {}).get("message", ""))
+        message = event.get("data", {}).get("message", "")
+        job["logs"].append(message)
+        # Keep transcription progress moving based on common log milestones.
+        if job.get("status") == "transcribing":
+            p = dict(job.get("progress") or _default_progress("transcribing"))
+            current = int(p.get("percent", 8) or 8)
+            if message.startswith("Sending "):
+                current = min(80, max(current + 6, 14))
+            elif message.startswith("Detected ") and "hallucinated range" in message:
+                current = max(current, 72)
+            elif message.startswith("Retrying from "):
+                current = min(88, current + 3)
+            elif message.startswith("No hallucinations detected"):
+                current = max(current, 88)
+            elif message.startswith("Transcript complete"):
+                current = max(current, 90)
+            p.update({
+                "phase": "transcribing",
+                "percent": current,
+                "label": "Transcribing audio",
+            })
+            job["progress"] = p
     elif etype == "status":
-        job["status"] = event.get("data", {}).get("status", job["status"])
+        status = event.get("data", {}).get("status", job["status"])
+        job["status"] = status
+        p = dict(job.get("progress") or _default_progress(status))
+        if status == "transcribing":
+            p.update({"phase": "transcribing", "percent": max(8, int(p.get("percent", 0))), "label": "Transcribing audio"})
+        elif status == "generating":
+            p.update({"phase": "generating", "percent": max(92, int(p.get("percent", 0))), "label": "Generating minutes"})
+        elif status in ("done", "error", "cancelled"):
+            p = _default_progress(status)
+        job["progress"] = p
+    elif etype == "progress":
+        incoming = event.get("data", {})
+        p = dict(job.get("progress") or _default_progress(job.get("status", "queued")))
+        p.update({k: v for k, v in incoming.items() if v is not None})
+        if p.get("percent") is not None:
+            try:
+                p["percent"] = max(0, min(100, int(p["percent"])))
+            except Exception:
+                p["percent"] = 0
+        job["progress"] = p
     elif etype == "result":
         job["result_md"] = event["data"].get("minutes", "")
         job["transcript"] = event["data"].get("transcript", "")
@@ -388,9 +484,11 @@ def _push(job_id: str, event: dict):
             transcript_path.write_text(job["transcript"], encoding="utf-8")
             job["transcript_file"] = transcript_path.name
         job["status"] = "done"
+        job["progress"] = _default_progress("done")
     elif etype == "error":
         job["error"] = event["data"].get("message", "Unknown error")
         job["status"] = "error"
+        job["progress"] = _default_progress("error")
     _persist_job(job_id)
     with _jobs_lock:
         subscribers = list(job["subscribers"])
@@ -423,6 +521,16 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
     def log(msg: str, level: str = "info"):
         print(f"  [{job_id[:8]}] {msg}")
         _emit(job_id, "log", message=msg, level=level)
+
+    def progress(percent: int, label: str, detail: str = "", phase: str | None = None):
+        _emit(
+            job_id,
+            "progress",
+            percent=max(0, min(100, int(percent))),
+            label=label,
+            detail=detail,
+            phase=phase or _jobs.get(job_id, {}).get("status", "queued"),
+        )
 
     cleanup: list = []
 
@@ -458,6 +566,11 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
         with _jobs_lock:
             _jobs[job_id]["meeting_name"] = meeting_name
 
+        audio_duration = _probe_audio_duration_seconds(audio_path)
+        with _jobs_lock:
+            _jobs[job_id]["audio_duration_sec"] = audio_duration
+        _persist_job(job_id)
+
         # Merge org vocabulary + roster entries with any names entered at submit time
         org_vocab  = org.get("vocabulary", "")
         org_roster = org.get("roster", "")
@@ -471,6 +584,12 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
 
         log(f"Starting: {meeting_name}")
         log(f"Audio: {audio_path.name}  ({audio_path.stat().st_size // 1024:,} KB)")
+        if audio_duration:
+            mins = int(audio_duration) // 60
+            secs = int(audio_duration) % 60
+            progress(8, "Transcribing audio", detail=f"Audio length {mins:02d}:{secs:02d}", phase="transcribing")
+        else:
+            progress(8, "Transcribing audio", detail="Audio length unknown", phase="transcribing")
         log(f"Whisper model: {_whisper_model or WHISPER_MODEL}")
         if combined_vocab:
             log(f"Vocabulary hints: {combined_vocab[:120]}{'...' if len(combined_vocab) > 120 else ''}")
@@ -479,21 +598,25 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
                             emit_callback=emit_cb,
                             whisper_url=_whisper_url,
                             whisper_model=_whisper_model)
+        progress(70, "Transcribing audio", detail="Initial pass complete", phase="transcribing")
         transcript = build_clean_transcript(audio_path, result, cleanup,
                                             hotwords=combined_vocab,
                                             emit_callback=emit_cb,
                                             whisper_url=_whisper_url,
                                             whisper_model=_whisper_model)
+        progress(90, "Transcribing audio", detail="Transcript ready", phase="transcribing")
 
         word_count = len(transcript.split())
         log(f"Transcript complete \u2014 {word_count:,} words")
 
         if backend == "transcript_only":
             _emit(job_id, "result", minutes="", transcript=transcript, meeting_name=meeting_name)
+            progress(100, "Complete", detail="Transcript generated", phase="done")
             log("Done (transcript only.)")
             return
 
         _emit(job_id, "status", status="generating")
+        progress(93, "Generating minutes", detail="Drafting summary", phase="generating")
         log(f"Generating minutes (backend: {backend})\u2026")
 
         if associated_context:
@@ -525,11 +648,13 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
             return
 
         _emit(job_id, "result", minutes=minutes, transcript=transcript, meeting_name=meeting_name)
+        progress(100, "Complete", detail="Minutes generated", phase="done")
         log("Done.")
 
     except Exception as exc:
         if cancel_event.is_set():
             log("Job cancelled.")
+            _emit(job_id, "progress", **_default_progress("cancelled"))
         else:
             log(f"Error: {exc}", level="error")
             _emit(job_id, "error", message=str(exc))
@@ -934,6 +1059,8 @@ def api_run():
     with _jobs_lock:
         _jobs[job_id]["audio_name"] = audio_name
         _jobs[job_id]["associated_files"] = associated_files
+        _jobs[job_id]["audio_duration_sec"] = _probe_audio_duration_seconds(dest)
+        _jobs[job_id]["progress"] = _default_progress("queued")
     _persist_job(job_id)
 
     with _jobs_lock:
@@ -1016,6 +1143,8 @@ def api_jobs_list():
                 "created_at":   j["created_at"],
                 "error":        j["error"],
                 "associated_files": len(j.get("associated_files", [])),
+                "progress":     j.get("progress") or _default_progress(j.get("status", "queued")),
+                "audio_duration_sec": j.get("audio_duration_sec"),
             }
             for jid, j in _jobs.items()
         ]
@@ -1044,7 +1173,9 @@ def api_cancel_job(job_id: str):
     with _jobs_lock:
         job["status"]  = "cancelled"
         job["error"]   = "Cancelled by user"
+        job["progress"] = _default_progress("cancelled")
     _persist_job(job_id)
+    _emit(job_id, "progress", **_default_progress("cancelled"))
     _emit(job_id, "status", status="cancelled")
     _emit(job_id, "eof")
     return jsonify({"ok": True})
@@ -1073,6 +1204,7 @@ def api_stream(job_id: str):
     with _jobs_lock:
         replay_logs  = list(job["logs"])
         curr_status  = job["status"]
+        curr_progress = dict(job.get("progress") or _default_progress(curr_status))
         result_md    = job["result_md"]
         transcript   = job["transcript"]
         meeting_name = job["meeting_name"]
@@ -1091,6 +1223,8 @@ def api_stream(job_id: str):
             if curr_status not in ("queued", ""):
                 ev = {"type": "status", "data": {"status": curr_status}}
                 yield f"data: {json.dumps(ev)}\n\n"
+            ev = {"type": "progress", "data": curr_progress}
+            yield f"data: {json.dumps(ev)}\n\n"
             # If job already finished, send terminal events and close
             if already_done:
                 if result_md is not None:
@@ -1157,6 +1291,8 @@ def api_job(job_id: str):
         "queue_pos":    queue_pos,
         "queue_total":  queue_total,
         "associated_files": job.get("associated_files", []),
+        "progress":     job.get("progress") or _default_progress(job.get("status", "queued")),
+        "audio_duration_sec": job.get("audio_duration_sec"),
     })
 
 

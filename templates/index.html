@@ -209,6 +209,39 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     #status-text { font-weight: 600; }
 
+    .progress-wrap {
+      margin-bottom: .75rem;
+    }
+    .progress-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: .75rem;
+      margin-bottom: .35rem;
+      font-size: .8rem;
+      color: var(--muted);
+    }
+    .progress-track {
+      width: 100%;
+      height: 10px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--border) 60%, var(--bg));
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--primary), var(--accent));
+      transition: width .35s ease;
+    }
+    .progress-detail {
+      font-size: .78rem;
+      color: var(--muted);
+      margin-top: .3rem;
+      min-height: 1.1rem;
+    }
+
     #log-box {
       background: var(--log-bg); color: var(--log-text);
       border-radius: var(--radius);
@@ -246,9 +279,14 @@
       border: 1px solid var(--border);
       border-radius: 100px;
       background: var(--bg);
+      color: var(--text);
       cursor: pointer;
       font-size: .9rem;
       transition: background .15s, border-color .15s;
+    }
+    [data-theme="dark"] .tab-btn:not(.active) {
+      border-color: #4a4a4a;
+      color: #e8e8e8;
     }
     .tab-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); font-weight: 600; }
     .tab-pane { display: none; }
@@ -300,6 +338,18 @@
     .job-status-badge {
       font-size: .75rem; font-weight: 700; border-radius: 100px;
       padding: .2rem .6rem; white-space: nowrap;
+    }
+    .job-progress {
+      width: 160px;
+      flex-shrink: 0;
+    }
+    .job-progress .progress-track { height: 8px; }
+    .job-progress-label {
+      font-size: .72rem;
+      color: var(--muted);
+      margin-top: .2rem;
+      text-align: right;
+      white-space: nowrap;
     }
     .badge-running  { background: color-mix(in srgb, var(--primary) 15%, var(--bg)); color: var(--primary); }
     .badge-done     { background: color-mix(in srgb, #2ecc71 15%, var(--bg));        color: #1a8a4a; }
@@ -442,6 +492,7 @@
       .card { padding: 1.1rem; }
       header h1 { font-size: 1.4rem; }
       .org-row-short { display: none; }
+      .job-progress { width: 120px; }
     }
   </style>
 </head>
@@ -562,7 +613,7 @@
       </div>
       <div id="associated-files-list" style="display:flex;flex-direction:column;gap:.4rem"></div>
       <p style="font-size:.78rem;color:var(--muted);margin-top:.3rem">
-        Upload prior minutes, handwritten notes, updated rosters, or other reference material to guide transcription and summary generation.
+        Upload prior minutes, handwritten notes, or other reference material to guide transcription and summary generation.
       </p>
       <div id="associated-files-empty" style="font-size:.8rem;color:var(--muted)">
         No associated files selected.
@@ -671,6 +722,16 @@
         <button id="back-btn" class="btn btn-outline" style="font-size:.82rem;padding:.35rem .85rem" title="Return to form (job keeps running)">&#8592; Back</button>
         <button id="cancel-btn" class="btn" style="background:var(--danger);color:#fff;font-size:.82rem;padding:.35rem .85rem" title="Cancel this job">&#10005; Cancel</button>
       </div>
+    </div>
+    <div class="progress-wrap">
+      <div class="progress-meta">
+        <span id="progress-phase">Preparing job</span>
+        <span id="progress-percent">0%</span>
+      </div>
+      <div class="progress-track" aria-label="Job progress">
+        <div id="detail-progress-fill" class="progress-fill"></div>
+      </div>
+      <div id="progress-detail" class="progress-detail"></div>
     </div>
     <div id="log-box"></div>
     <p id="share-hint" style="margin-top:.85rem;font-size:.82rem;color:var(--muted);display:none">
@@ -1232,6 +1293,29 @@ const fileInput = document.getElementById("file-input");
 const fileLabel = document.getElementById("file-name");
 const submitBtn = document.getElementById("submit-btn");
 
+function _formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  const total = Math.round(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function updateDetailProgress(progress = {}, audioDurationSec = null) {
+  const p = Math.max(0, Math.min(100, Number(progress.percent ?? 0)));
+  const label = progress.label || "Processing";
+  const detailFromEvent = progress.detail || "";
+  const durationText = _formatDuration(audioDurationSec);
+  const detail = detailFromEvent || (durationText ? `Audio length ${durationText}` : "");
+
+  document.getElementById("detail-progress-fill").style.width = `${p}%`;
+  document.getElementById("progress-percent").textContent = `${Math.round(p)}%`;
+  document.getElementById("progress-phase").textContent = label;
+  document.getElementById("progress-detail").textContent = detail;
+}
+
 function setFile(file) {
   selectedFile = file;
   fileLabel.textContent = `\u2714 ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`;
@@ -1277,6 +1361,7 @@ submitBtn.addEventListener("click", async () => {
   document.getElementById("form-section").style.display     = "none";
   document.getElementById("progress-section").style.display = "block";
   setStatus("Uploading\u2026");
+  updateDetailProgress({ percent: 2, label: "Uploading audio", detail: "Preparing job" });
 
   let resp;
   try {
@@ -1311,6 +1396,8 @@ function listenSSE(jobId) {
 
     if (evt.type === "log") {
       appendLog(evt.data.message || "", evt.data.level);
+    } else if (evt.type === "progress") {
+      updateDetailProgress(evt.data || {});
     } else if (evt.type === "status") {
       const s = evt.data.status;
       if      (s === "transcribing") setStatus("Transcribing audio\u2026");
@@ -1402,6 +1489,7 @@ document.getElementById("reset-btn").addEventListener("click", () => {
   selectedAssociatedFiles = [];
   fileLabel.textContent = "";
   logBox.innerHTML   = "";
+  updateDetailProgress({ percent: 0, label: "Preparing job", detail: "" });
   renderAssociatedFiles();
   document.getElementById("form-section").style.display     = "block";
   document.getElementById("progress-section").style.display = "none";
@@ -1451,6 +1539,7 @@ function showJobFailure(jobId, msg, appendToLog = true) {
       history.replaceState({jobId}, '', `?job=${encodeURIComponent(jobId)}`);
     }
   }
+  updateDetailProgress({ percent: 100, label: "Failed", detail: msg || "Job failed" });
   setStatus("Failed");
   if (appendToLog && msg) appendLog(msg, "error");
   showError(msg || "Job failed.");
@@ -1503,11 +1592,20 @@ async function refreshActiveJobs() {
                      : `Queued${queueInfo}`;
     const name = j.meeting_name || "Unnamed job";
     const ago  = _timeAgo(j.created_at);
+    const progress = j.progress || {};
+    const pct = Math.max(0, Math.min(100, Number(progress.percent ?? (isActive ? 0 : 100))));
+    const detail = progress.detail || (_formatDuration(j.audio_duration_sec) ? `Audio ${_formatDuration(j.audio_duration_sec)}` : "");
 
     const row = document.createElement("div");
     row.className = "job-row";
     row.innerHTML = `
       <span class="job-row-name">${escHtml(name)}<small>${escHtml(ago)}</small></span>
+      ${isActive ? `
+      <span class="job-progress" aria-label="Progress for ${escHtml(name)}">
+        <span class="progress-track"><span class="progress-fill" style="width:${pct}%"></span></span>
+        <span class="job-progress-label">${Math.round(pct)}%${detail ? ` · ${escHtml(detail)}` : ""}</span>
+      </span>
+      ` : ""}
       <span class="job-status-badge ${badgeClass}">${badgeLabel}</span>
       ${isActive ? `<button class="btn" style="background:var(--danger);color:#fff;font-size:.79rem;padding:.25rem .6rem;flex-shrink:0" onclick="cancelJob('${escHtml(j.job_id)}')">&#10005;</button>` : ""}
       ${!isActive ? `<button class="btn" style="background:var(--danger);color:#fff;font-size:.79rem;padding:.25rem .6rem;flex-shrink:0" onclick="deleteJob('${escHtml(j.job_id)}')">Delete</button>` : ""}
@@ -1584,6 +1682,7 @@ if (!new URLSearchParams(window.location.search).get("job")) {
   fetch(`/api/jobs/${jobId}`)
     .then(r => r.ok ? r.json() : Promise.reject(r.status))
     .then(j => {
+      updateDetailProgress(j.progress || {}, j.audio_duration_sec);
       if (j.status === "done") {
         showResults(jobId, j.result_md, j.transcript, j.meeting_name);
       } else if (j.status === "error") {
