@@ -195,6 +195,17 @@
       animation: spin .7s linear infinite;
       flex-shrink: 0;
     }
+    .spinner.is-failed {
+      animation: none;
+      border-color: var(--danger);
+      border-top-color: var(--danger);
+    }
+    .spinner.is-idle {
+      animation: none;
+      border-color: var(--muted);
+      border-top-color: var(--muted);
+      opacity: .7;
+    }
     @keyframes spin { to { transform: rotate(360deg); } }
     #status-text { font-weight: 600; }
 
@@ -680,7 +691,7 @@
     <h2>&#9881; Processing</h2>
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem;margin-bottom:.35rem">
       <div class="status-bar" style="flex:1;min-width:0">
-        <div class="spinner"></div>
+        <div id="status-indicator" class="spinner"></div>
         <span id="status-text">Starting&hellip;</span>
       </div>
       <div style="display:flex;gap:.5rem;flex-shrink:0">
@@ -1374,7 +1385,17 @@ function appendLog(msg, level) {
   logBox.appendChild(line);
   logBox.scrollTop = logBox.scrollHeight;
 }
-function setStatus(msg) { document.getElementById("status-text").textContent = msg; }
+function setStatus(msg) {
+  document.getElementById("status-text").textContent = msg;
+  const indicator = document.getElementById("status-indicator");
+  if (!indicator) return;
+  indicator.classList.remove("is-failed", "is-idle");
+  if (msg === "Failed") {
+    indicator.classList.add("is-failed");
+  } else if (msg.startsWith("Waiting in queue") || msg === "Loading…") {
+    indicator.classList.add("is-idle");
+  }
+}
 
 // ── Results ────────────────────────────────────────────────────────────────
 function showResults(jobId, minutes, transcript, meetingName) {

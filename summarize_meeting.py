@@ -157,10 +157,15 @@ def safe_filename(name: str) -> str:
     return re.sub(r'[<>:"/\\|?*]', "", name).strip()
 
 
+def normalize_base_url(url: str) -> str:
+    """Return a clean service base URL with no trailing slash."""
+    return (url or "").strip().rstrip("/")
+
+
 # ── Transcription ───────────────────────────────────────────────────────────────
 
 def ensure_model_downloaded(model: str, whisper_url: str = None) -> None:
-    url = whisper_url or WHISPER_URL
+    url = normalize_base_url(whisper_url or WHISPER_URL)
     encoded = model.replace("/", "%2F")
     print(f"  Pulling model {model} from Whisper API server ...")
     resp = requests.post(f"{url}/v1/models/{encoded}", timeout=600)
@@ -170,7 +175,7 @@ def ensure_model_downloaded(model: str, whisper_url: str = None) -> None:
 
 def unload_whisper_model(model: str, whisper_url: str = None) -> None:
     """Unload the Whisper model from the API server memory."""
-    url = whisper_url or WHISPER_URL
+    url = normalize_base_url(whisper_url or WHISPER_URL)
     encoded = model.replace("/", "%2F")
     try:
         resp = requests.delete(f"{url}/api/ps/{encoded}", timeout=30)
@@ -184,7 +189,7 @@ def unload_whisper_model(model: str, whisper_url: str = None) -> None:
 
 def unload_ollama_model(model: str, ollama_url: str = None) -> None:
     """Unload an Ollama model from memory by sending a keep_alive=0 request."""
-    url = ollama_url or OLLAMA_URL
+    url = normalize_base_url(ollama_url or OLLAMA_URL)
     try:
         resp = requests.post(
             f"{url}/api/generate",
@@ -205,7 +210,7 @@ def transcribe(audio_path: Path, cleanup: list,
                whisper_url: str = None,
                whisper_model: str = None) -> dict:
     """Send audio to the Whisper API server and return the verbose_json dict."""
-    url   = whisper_url   or WHISPER_URL
+    url   = normalize_base_url(whisper_url or WHISPER_URL)
     model = whisper_model or WHISPER_MODEL
 
     def _log(msg):
