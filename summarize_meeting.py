@@ -172,13 +172,26 @@ def normalize_base_url(url: str) -> str:
 
 # ── Transcription ───────────────────────────────────────────────────────────────
 
-def ensure_model_downloaded(model: str, whisper_url: str = None) -> None:
+def ensure_model_downloaded(model: str, whisper_url: str = None,
+                            emit_callback=None) -> None:
     url = normalize_base_url(whisper_url or WHISPER_URL)
     encoded = model.replace("/", "%2F")
-    print(f"  Pulling model {model} from Whisper API server ...")
-    resp = requests.post(f"{url}/v1/models/{encoded}", timeout=600)
+    msg = f"Whisper model '{model}' not found on server — downloading now (this may take several minutes) ..."
+    print(f"  {msg}")
+    if emit_callback:
+        try:
+            emit_callback("log", message=msg, level="info")
+        except Exception:
+            pass
+    resp = requests.post(f"{url}/v1/models/{encoded}", timeout=1800)  # 30 min for large models
     resp.raise_for_status()
-    print("  Model ready.")
+    ready_msg = f"Whisper model '{model}' downloaded and ready."
+    print(f"  {ready_msg}")
+    if emit_callback:
+        try:
+            emit_callback("log", message=ready_msg, level="info")
+        except Exception:
+            pass
 
 
 def unload_whisper_model(model: str, whisper_url: str = None) -> None:
@@ -346,7 +359,7 @@ def transcribe(audio_path: Path, cleanup: list,
                         }
 
     if resp.status_code == 404 and "not installed" in resp.text.lower():
-        ensure_model_downloaded(model, whisper_url=url)
+        ensure_model_downloaded(model, whisper_url=url, emit_callback=emit_callback)
         return transcribe(audio_path, cleanup, prompt, hotwords,
                           emit_callback, whisper_url=url, whisper_model=model)
 
