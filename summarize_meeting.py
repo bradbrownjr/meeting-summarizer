@@ -226,14 +226,15 @@ def _transcribe_openai_compatible(audio_path: Path, url: str, model: str,
 
 
 def _transcribe_asr_webservice(audio_path: Path, url: str,
-                               prompt: str, hotwords: str) -> requests.Response:
+                               prompt: str, hotwords: str,
+                               include_prompt: bool = True,
+                               minimal: bool = False) -> requests.Response:
     initial_prompt = " ".join(part.strip() for part in (prompt, hotwords) if part.strip())
-    params = {
-        "output": "json",
-        "task": "transcribe",
-        "encode": "true",
-    }
-    if initial_prompt:
+    params = {"output": "json"}
+    if not minimal:
+        params["task"] = "transcribe"
+        params["encode"] = "true"
+    if include_prompt and initial_prompt:
         params["initial_prompt"] = initial_prompt
 
     with open(audio_path, "rb") as fh:
@@ -274,9 +275,19 @@ def transcribe(audio_path: Path, cleanup: list,
     if resp.status_code == 404:
         _log("OpenAI-compatible transcription endpoint: not found.")
         _log("Checking transcription endpoint: Whisper ASR Box /asr compatibility mode ...")
-        resp = _transcribe_asr_webservice(audio_path, url, prompt, hotwords)
+        resp = _transcribe_asr_webservice(audio_path, url, prompt, hotwords, include_prompt=True, minimal=False)
         if resp.status_code == 200:
             _log("Whisper ASR Box transcription endpoint: connected.")
+        elif resp.status_code >= 500:
+            _log("Whisper ASR Box /asr returned server error; retrying without initial_prompt ...")
+            resp = _transcribe_asr_webservice(audio_path, url, prompt, hotwords, include_prompt=False, minimal=False)
+            if resp.status_code == 200:
+                _log("Whisper ASR Box transcription endpoint: connected (without initial_prompt).")
+            elif resp.status_code >= 500:
+                _log("Whisper ASR Box /asr still failing; retrying with minimal query parameters ...")
+                resp = _transcribe_asr_webservice(audio_path, url, prompt, hotwords, include_prompt=False, minimal=True)
+                if resp.status_code == 200:
+                    _log("Whisper ASR Box transcription endpoint: connected (minimal mode).")
 
     if resp.status_code == 404 and "not installed" in resp.text.lower():
         ensure_model_downloaded(model, whisper_url=url)
