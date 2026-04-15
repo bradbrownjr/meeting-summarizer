@@ -1271,8 +1271,14 @@ fileInput.addEventListener("change", e => { if (e.target.files[0]) setFile(e.tar
 // ── Back + Cancel buttons ───────────────────────────────────────────
 document.getElementById("back-btn").addEventListener("click", () => {
   if (_activeES) { _activeES.close(); _activeES = null; }
+  currentJobId = null;
+  document.getElementById("share-hint").style.display = "none";
   document.getElementById("progress-section").style.display = "none";
   document.getElementById("form-section").style.display     = "block";
+  if (window.location.search.includes("job=")) {
+    history.replaceState({}, '', window.location.pathname);
+  }
+  refreshActiveJobs();
 });
 
 document.getElementById("cancel-btn").addEventListener("click", async () => {
