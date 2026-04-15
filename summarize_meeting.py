@@ -573,6 +573,9 @@ def save_config(cfg: dict) -> None:
 # ── CLI ─────────────────────────────────────────────────────────────────────────
 
 def main():
+    # ── Global declarations must come first ────────────────────────────────────
+    global WHISPER_MODEL, WHISPER_URL
+    
     parser = argparse.ArgumentParser(
         description="Transcribe a meeting recording and generate minutes.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -633,14 +636,12 @@ def main():
     # ── Interactive prompts for missing arguments ────────────────────────────
 
     # Whisper model
-    global WHISPER_MODEL
     if args.whisper_model:
         WHISPER_MODEL = args.whisper_model
     elif not os.getenv("WHISPER_MODEL"):
         WHISPER_MODEL = cfg.get("whisper_model", WHISPER_MODEL)
 
     # Whisper API URL
-    global WHISPER_URL
     if args.whisper_url:
         WHISPER_URL = args.whisper_url
     elif not os.getenv("WHISPER_URL"):

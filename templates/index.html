@@ -1354,16 +1354,12 @@ function listenSSE(jobId) {
         if (j.status === "done")        showResults(jobId, j.result_md, j.transcript, j.meeting_name);
         else if (j.status === "error")     showFormError(j.error || "Unknown error");
         else if (j.status === "cancelled") {
-          document.getElementById("progress-section").style.display = "none";
-          document.getElementById("form-section").style.display     = "block";
-          showError("Job was cancelled.");
+          showFormError("Job was cancelled.");
         }
       })
       .catch(status => {
         if (status === 404) {
-          document.getElementById("progress-section").style.display = "none";
-          document.getElementById("form-section").style.display     = "block";
-          showError("Job not found \u2014 the server may have restarted.");
+          showFormError("Job not found \u2014 the server may have restarted.");
         }
       });
   };
@@ -1440,6 +1436,12 @@ function showError(msg) {
 function showFormError(msg) {
   document.getElementById("form-section").style.display     = "block";
   document.getElementById("progress-section").style.display = "none";
+  document.getElementById("share-hint").style.display       = "none";
+  currentJobId = null;
+  if (window.location.search.includes("job=")) {
+    history.replaceState({}, '', window.location.pathname);
+  }
+  refreshActiveJobs();
   showError(msg);
 }
 function escHtml(s) {
@@ -1567,9 +1569,7 @@ if (!new URLSearchParams(window.location.search).get("job")) {
     .catch(status => {
       if (status === 404) {
         // Job not in memory (server restarted) — show a clean message
-        document.getElementById("progress-section").style.display = "none";
-        document.getElementById("form-section").style.display     = "block";
-        showError("Job not found \u2014 the server may have restarted. Please submit a new job.");
+        showFormError("Job not found \u2014 the server may have restarted. Please submit a new job.");
       } else {
         setStatus("Connecting\u2026");
         listenSSE(jobId);

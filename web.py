@@ -449,7 +449,20 @@ def _queue_worker():
             pending = job.pop("_pending_args", None)
             if pending is None:
                 continue
-            _run_job(job_id, *pending["args"], **pending["kwargs"])
+            try:
+                _run_job(job_id, *pending["args"], **pending["kwargs"])
+            except Exception as exc:
+                message = f"Worker crashed before job could complete: {exc}"
+                print(f"  [{job_id[:8]}] {message}")
+                with _jobs_lock:
+                    job = _jobs.get(job_id)
+                    if job:
+                        job["logs"].append(message)
+                        job["error"] = message
+                        job["status"] = "error"
+                _emit(job_id, "log", message=message, level="error")
+                _emit(job_id, "error", message=message)
+                _emit(job_id, "eof")
         finally:
             _run_queue.task_done()
 
@@ -966,8 +979,21 @@ def api_stream(job_id: str):
 def api_job(job_id: str):
     with _jobs_lock:
         job = _jobs.get(job_id)
+        queued_job_ids = [
+            jid for jid, entry in _jobs.items()
+            if entry["status"] == "queued"
+        ]
     if not job:
         return jsonify({"error": "Not found"}), 404
+    queued_job_ids.sort(key=lambda jid: _jobs[jid]["created_at"])
+    queue_pos = None
+    queue_total = None
+    if job["status"] == "queued":
+        queue_total = len(queued_job_ids)
+        try:
+            queue_pos = queued_job_ids.index(job_id) + 1
+        except ValueError:
+            queue_pos = None
     return jsonify({
         "status":       job["status"],
         "meeting_name": job["meeting_name"],
@@ -975,6 +1001,8 @@ def api_job(job_id: str):
         "result_md":    job["result_md"],
         "transcript":   job["transcript"],
         "error":        job["error"],
+        "queue_pos":    queue_pos,
+        "queue_total":  queue_total,
     })
 
 
