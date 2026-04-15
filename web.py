@@ -120,7 +120,8 @@ def _make_org_id(label: str, existing: dict) -> str:
 # ── Flask app ─────────────────────────────────────────────────────────────────
 
 _template_dir = os.path.join(os.path.dirname(__file__), "templates")
-app = Flask(__name__, template_folder=_template_dir)
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+app = Flask(__name__, template_folder=_template_dir, static_folder=_static_dir)
 app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024  # 500 MB
 
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", tempfile.gettempdir())) / "meeting_uploads"

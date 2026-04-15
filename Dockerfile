@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY summarize_meeting.py .
 COPY web.py .
 COPY templates/ ./templates/
+COPY static/ ./static/
 
 # Whisper model cache (avoids re-download on restart)
 # /data holds orgs.json (committee templates, user-configured)
