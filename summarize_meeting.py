@@ -393,18 +393,32 @@ def build_clean_transcript(audio_path: Path, result: dict,
 
 # ── Minutes generation ──────────────────────────────────────────────────────────
 
-def _build_user_content(transcript: str, names: str, context: str) -> str:
+def _build_user_content(transcript: str, names: str, context: str,
+                        prev_minutes: str = "", roster: str = "") -> str:
     parts = []
     if context:
         parts.append(f"Meeting context: {context}")
     if names:
         parts.append(f"Known attendee/vendor names (use for correct spelling): {names}")
+    if roster:
+        parts.append(
+            "Club member roster (name and call sign \u2014 use for attendance "
+            "identification and correct spelling of names and call signs):\n"
+            + roster
+        )
+    if prev_minutes:
+        parts.append(
+            "Previous meeting minutes (use for context on old/new business, "
+            "member names, and continuity — do not copy verbatim):\n"
+            + prev_minutes
+        )
     parts.append(transcript)
     return "\n\n".join(parts)
 
 
 def generate_minutes_claude_api(transcript: str, names: str, context: str,
-                                emit_callback=None) -> str:
+                                emit_callback=None, prev_minutes: str = "",
+                                roster: str = "") -> str:
     """Generate minutes using the Anthropic API (requires ANTHROPIC_API_KEY)."""
     if emit_callback:
         try:
@@ -412,7 +426,7 @@ def generate_minutes_claude_api(transcript: str, names: str, context: str,
         except Exception:
             pass
     client = anthropic.Anthropic()
-    user_content = _build_user_content(transcript, names, context)
+    user_content = _build_user_content(transcript, names, context, prev_minutes, roster)
     print(f"  Sending transcript to Claude API ({CLAUDE_MODEL}) ...")
     message = client.messages.create(
         model=CLAUDE_MODEL,
@@ -425,7 +439,8 @@ def generate_minutes_claude_api(transcript: str, names: str, context: str,
 
 def generate_minutes_ollama(transcript: str, names: str, context: str,
                             model: str, emit_callback=None,
-                            ollama_url: str = None) -> str:
+                            ollama_url: str = None, prev_minutes: str = "",
+                            roster: str = "") -> str:
     """Generate minutes using a local Ollama model."""
     url = ollama_url or OLLAMA_URL
     if emit_callback:
@@ -433,7 +448,7 @@ def generate_minutes_ollama(transcript: str, names: str, context: str,
             emit_callback("log", message=f"Sending transcript to Ollama ({model})...", level="info")
         except Exception:
             pass
-    user_content = _build_user_content(transcript, names, context)
+    user_content = _build_user_content(transcript, names, context, prev_minutes, roster)
     print(f"  Sending transcript to Ollama ({model}) ...")
     resp = requests.post(
         f"{url}/api/chat",
@@ -453,13 +468,14 @@ def generate_minutes_ollama(transcript: str, names: str, context: str,
 
 
 def generate_minutes_claude_cli(transcript: str, names: str,
-                                context: str) -> str:
+                                context: str, prev_minutes: str = "",
+                                roster: str = "") -> str:
     """Generate minutes by piping the transcript through the `claude` CLI.
 
-    Uses your Claude Pro subscription — no API key required.
+    Uses your Claude Pro subscription \u2014 no API key required.
     Requires `claude` to be installed and authenticated.
     """
-    user_content = _build_user_content(transcript, names, context)
+    user_content = _build_user_content(transcript, names, context, prev_minutes, roster)
     full_prompt  = f"{SYSTEM_PROMPT}\n\n{user_content}"
     print("  Sending transcript to claude CLI ...")
     result = subprocess.run(
@@ -475,17 +491,25 @@ def generate_minutes(transcript: str, names: str = "", context: str = "",
                      backend: str = "claude-api",
                      ollama_model: str = "",
                      emit_callback=None,
-                     ollama_url: str = None) -> str:
+                     ollama_url: str = None,
+                     prev_minutes: str = "",
+                     roster: str = "") -> str:
     if backend == "claude-api":
         return generate_minutes_claude_api(transcript, names, context,
-                                           emit_callback=emit_callback)
+                                           emit_callback=emit_callback,
+                                           prev_minutes=prev_minutes,
+                                           roster=roster)
     elif backend == "ollama":
         return generate_minutes_ollama(transcript, names, context,
                                        ollama_model or OLLAMA_MODEL,
                                        emit_callback=emit_callback,
-                                       ollama_url=ollama_url)
+                                       ollama_url=ollama_url,
+                                       prev_minutes=prev_minutes,
+                                       roster=roster)
     elif backend == "claude-cli":
-        return generate_minutes_claude_cli(transcript, names, context)
+        return generate_minutes_claude_cli(transcript, names, context,
+                                           prev_minutes=prev_minutes,
+                                           roster=roster)
     else:
         raise RuntimeError(f"Unknown backend: {backend}")
 

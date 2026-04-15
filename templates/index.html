@@ -420,6 +420,20 @@
       flex-wrap: wrap;
     }
 
+    /* Previous minutes */
+    #prev-minutes-file-btn {
+      font-size: .8rem;
+      padding: .3rem .75rem;
+      margin-top: .4rem;
+    }
+    #prev-minutes-file-name {
+      font-size: .8rem;
+      color: var(--primary);
+      margin-top: .25rem;
+      font-weight: 600;
+      min-height: 1em;
+    }
+
     @media (max-width: 480px) {
       .card { padding: 1.1rem; }
       header h1 { font-size: 1.4rem; }
@@ -505,6 +519,16 @@
           <label>Vocabulary <span class="hint">Names, place names, abbreviations, and jargon — one per line or comma-separated. Improves transcription accuracy.</span></label>
           <textarea id="ed-vocab" rows="4"
             placeholder="e.g. WOHD, Waterboro, Old Home Days, Jane Smith, John Doe"></textarea>
+        </div>
+        <div class="field">
+          <label>Member Roster <span class="hint">One member per line. Include call signs inline, e.g. "Jane Smith W1ABC". Fed to both the transcriber and the AI for name and call sign recognition.</span></label>
+          <textarea id="ed-roster" rows="6"
+            placeholder="e.g.&#10;Jane Smith W1ABC&#10;John Doe KD9XYZ&#10;Bob Wilson VE3ABC"></textarea>
+          <div style="margin-top:.4rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+            <button class="btn btn-ghost" type="button" id="roster-file-btn" style="font-size:.8rem;padding:.3rem .75rem">&#128194; Load from .txt file</button>
+            <span id="roster-file-name" style="font-size:.8rem;color:var(--primary);font-weight:600"></span>
+          </div>
+          <input type="file" id="roster-file-input" accept=".txt,.csv" style="display:none" />
         </div>
         <div class="editor-actions">
           <button class="btn btn-primary" type="button" id="save-org-btn">Save</button>
@@ -594,6 +618,20 @@
     </div>
     <input type="file" id="file-input"
            accept=".mp3,.m4a,.wav,.ogg,.flac,.aac,.wma,.opus" />
+  </div>
+
+  <div class="card">
+    <h2>&#128196; Previous Minutes <span style="font-size:.8rem;font-weight:400;color:var(--muted)">(optional)</span></h2>
+    <div class="field">
+      <label>Last month's minutes <span class="hint">Gives the AI context for old/new business continuity, member names, and call signs</span></label>
+      <textarea id="prev-minutes-textarea" rows="5"
+        placeholder="Paste previous meeting minutes here, or use the button below to load a .txt / .md file&#x2026;"></textarea>
+      <div style="margin-top:.4rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+        <button class="btn btn-outline" type="button" id="prev-minutes-file-btn">&#128194; Load from file</button>
+        <span id="prev-minutes-file-name"></span>
+      </div>
+      <input type="file" id="prev-minutes-file-input" accept=".txt,.md" style="display:none" />
+    </div>
   </div>
 
   <button id="submit-btn" disabled>Generate Minutes</button>
@@ -911,6 +949,7 @@ document.getElementById("save-org-btn").addEventListener("click", async () => {
     context_template: document.getElementById("ed-context").value.trim(),
     name_template:    document.getElementById("ed-name-tpl").value.trim(),
     vocabulary:       document.getElementById("ed-vocab").value.trim(),
+    roster:           document.getElementById("ed-roster").value.trim(),
   };
   if (!payload.label) { alert("Name is required."); return; }
 
@@ -962,12 +1001,14 @@ function openEditor(id) {
     document.getElementById("ed-context").value  = o.context_template || "";
     document.getElementById("ed-name-tpl").value = o.name_template    || "";
     document.getElementById("ed-vocab").value    = o.vocabulary       || "";
+    document.getElementById("ed-roster").value   = o.roster           || "";
   } else {
     document.getElementById("ed-label").value    = "";
     document.getElementById("ed-short").value    = "";
     document.getElementById("ed-context").value  = "";
     document.getElementById("ed-name-tpl").value = "Meeting \u2013 {month_year}";
     document.getElementById("ed-vocab").value    = "";
+    document.getElementById("ed-roster").value   = "";
   }
   document.getElementById("ed-label").focus();
 }
@@ -976,6 +1017,38 @@ function closeEditor() {
   document.getElementById("org-editor").style.display = "none";
   editingOrgId = null;
 }
+
+// ── Previous minutes file loader ───────────────────────────────────────────
+document.getElementById("prev-minutes-file-btn").addEventListener("click", () => {
+  document.getElementById("prev-minutes-file-input").click();
+});
+document.getElementById("prev-minutes-file-input").addEventListener("change", e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    document.getElementById("prev-minutes-textarea").value = ev.target.result;
+    document.getElementById("prev-minutes-file-name").textContent = "\u2714 " + f.name;
+  };
+  reader.readAsText(f);
+  e.target.value = "";
+});
+
+// ── Roster file loader (org editor) ────────────────────────────────────────
+document.getElementById("roster-file-btn").addEventListener("click", () => {
+  document.getElementById("roster-file-input").click();
+});
+document.getElementById("roster-file-input").addEventListener("change", e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    document.getElementById("ed-roster").value = ev.target.result.trim();
+    document.getElementById("roster-file-name").textContent = "\u2714 " + f.name;
+  };
+  reader.readAsText(f);
+  e.target.value = "";
+});
 
 // ── Backend toggle ─────────────────────────────────────────────────────────
 document.getElementById("backend-input").addEventListener("change", e => {
@@ -1021,6 +1094,8 @@ submitBtn.addEventListener("click", async () => {
   fd.append("backend",      document.getElementById("backend-input").value);
   fd.append("ollama_model", document.getElementById("ollama-model-input").value.trim());
   fd.append("server_id",    document.getElementById("server-input").value);
+  const prevText = document.getElementById("prev-minutes-textarea").value.trim();
+  if (prevText) fd.append("prev_minutes_text", prevText);
 
   document.getElementById("form-section").style.display     = "none";
   document.getElementById("progress-section").style.display = "block";
@@ -1125,6 +1200,8 @@ document.getElementById("reset-btn").addEventListener("click", () => {
   dropZone.classList.remove("has-file");
   submitBtn.disabled = true;
   logBox.innerHTML   = "";
+  document.getElementById("prev-minutes-textarea").value  = "";
+  document.getElementById("prev-minutes-file-name").textContent = "";
   document.getElementById("form-section").style.display     = "block";
   document.getElementById("progress-section").style.display = "none";
   document.getElementById("result-section").style.display   = "none";

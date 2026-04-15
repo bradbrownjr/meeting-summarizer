@@ -160,7 +160,7 @@ def _emit(job_id: str, event_type: str, **data):
 
 def _run_job(job_id: str, audio_path: Path, org_id: str,
              date_str: str, names: str, backend: str, ollama_model: str,
-             server_id: str = "default"):
+             server_id: str = "default", prev_minutes: str = ""):
     from summarize_meeting import (
         transcribe, build_clean_transcript, generate_minutes,
         unload_whisper_model, unload_ollama_model,
@@ -201,9 +201,16 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
         with _jobs_lock:
             _jobs[job_id]["meeting_name"] = meeting_name
 
-        # Merge org vocabulary with any names entered at submit time
-        org_vocab = org.get("vocabulary", "")
-        combined_vocab = ", ".join(filter(None, [org_vocab, names]))
+        # Merge org vocabulary + roster entries with any names entered at submit time
+        org_vocab  = org.get("vocabulary", "")
+        org_roster = org.get("roster", "")
+        # Flatten roster lines into comma-separated hotword tokens for Whisper
+        roster_vocab = ", ".join(
+            token
+            for line in org_roster.splitlines()
+            for token in [line.strip()] if token
+        )
+        combined_vocab = ", ".join(filter(None, [org_vocab, roster_vocab, names]))
 
         log(f"Starting: {meeting_name}")
         log(f"Audio: {audio_path.name}  ({audio_path.stat().st_size // 1024:,} KB)")
@@ -232,6 +239,11 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
         _emit(job_id, "status", status="generating")
         log(f"Generating minutes (backend: {backend})\u2026")
 
+        if prev_minutes:
+            log(f"Previous minutes provided ({len(prev_minutes.split()):,} words) — including as context.")
+        if org_roster:
+            log(f"Roster: {len([l for l in org_roster.splitlines() if l.strip()])} members loaded.")
+
         minutes = generate_minutes(
             transcript,
             names=names,
@@ -240,6 +252,8 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
             ollama_model=ollama_model or OLLAMA_MODEL,
             emit_callback=emit_cb,
             ollama_url=_ollama_url,
+            prev_minutes=prev_minutes,
+            roster=org_roster,
         )
         _emit(job_id, "result", minutes=minutes, transcript=transcript, meeting_name=meeting_name)
         log("Done.")
@@ -303,6 +317,7 @@ def api_orgs_create():
         "context_template": data.get("context_template", "").strip(),
         "name_template":    data.get("name_template", "Meeting \u2013 {month_year}").strip(),
         "vocabulary":       data.get("vocabulary", "").strip(),
+        "roster":           data.get("roster", "").strip(),
     }
     save_orgs(orgs)
     return jsonify({"ok": True, "id": org_id, "orgs": orgs})
@@ -322,6 +337,7 @@ def api_orgs_update(org_id: str):
         "context_template": data.get("context_template", "").strip(),
         "name_template":    data.get("name_template", "Meeting \u2013 {month_year}").strip(),
         "vocabulary":       data.get("vocabulary", "").strip(),
+        "roster":           data.get("roster", "").strip(),
     }
     save_orgs(orgs)
     return jsonify({"ok": True, "orgs": orgs})
@@ -426,9 +442,38 @@ def _apply_org_entries(entries: list[dict], orgs: dict) -> tuple[list, list]:
             "context_template": (entry.get("context_template") or "").strip(),
             "name_template":    (entry.get("name_template") or "Meeting \u2013 {month_year}").strip(),
             "vocabulary":       vocab.strip(),
+            "roster":           (entry.get("roster") or "").strip(),
         }
         imported.append(label)
     return imported, errors
+
+
+@app.route("/api/orgs/<org_id>/roster", methods=["POST"])
+def api_orgs_roster_upload(org_id: str):
+    """Replace an org's roster from an uploaded plain-text file (one member per line)."""
+    orgs = load_orgs()
+    if org_id not in orgs:
+        return jsonify({"error": "Not found"}), 404
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"error": "No file provided"}), 400
+    if Path(f.filename).suffix.lower() not in (".txt", ".csv"):
+        return jsonify({"error": "File must be .txt or .csv"}), 400
+    try:
+        text = f.read().decode("utf-8", errors="replace")
+    except Exception as exc:
+        return jsonify({"error": f"Could not read file: {exc}"}), 400
+    # Normalise: strip blank lines, deduplicate while preserving order
+    seen, lines = set(), []
+    for line in text.splitlines():
+        line = line.strip().strip(",")
+        if line and line not in seen:
+            seen.add(line)
+            lines.append(line)
+    roster = "\n".join(lines)
+    orgs[org_id]["roster"] = roster
+    save_orgs(orgs)
+    return jsonify({"ok": True, "count": len(lines), "orgs": orgs})
 
 
 @app.route("/api/orgs/templates", methods=["GET"])
@@ -510,6 +555,17 @@ def api_run():
     ollama_model = request.form.get("ollama_model", "")
     server_id    = request.form.get("server_id", "default")
 
+    # Optional previous minutes: either pasted text or an uploaded .txt/.md file
+    prev_minutes = ""
+    prev_file = request.files.get("prev_minutes_file")
+    if prev_file and prev_file.filename:
+        try:
+            prev_minutes = prev_file.read().decode("utf-8", errors="replace").strip()
+        except Exception:
+            pass
+    if not prev_minutes:
+        prev_minutes = request.form.get("prev_minutes_text", "").strip()
+
     job_id = _new_job()
     dest = UPLOAD_DIR / job_id / Path(audio.filename).name
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -518,6 +574,7 @@ def api_run():
     threading.Thread(
         target=_run_job,
         args=(job_id, dest, org_id, date_str, names, backend, ollama_model, server_id),
+        kwargs={"prev_minutes": prev_minutes},
         daemon=True,
     ).start()
 
