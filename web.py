@@ -441,19 +441,21 @@ def _push(job_id: str, event: dict):
         message = event.get("data", {}).get("message", "")
         job["logs"].append(message)
         # Keep transcription progress moving based on common log milestones.
+        # Cap heuristic at 69 so the explicit progress(70,...) call always
+        # represents a meaningful step forward after initial transcription.
         if job.get("status") == "transcribing":
             p = dict(job.get("progress") or _default_progress("transcribing"))
             current = int(p.get("percent", 8) or 8)
             if message.startswith("Sending "):
-                current = min(80, max(current + 6, 14))
+                current = min(69, max(current + 6, 14))
             elif message.startswith("Detected ") and "hallucinated range" in message:
-                current = max(current, 72)
+                current = max(current, 65)
             elif message.startswith("Retrying from "):
-                current = min(88, current + 3)
+                current = min(69, current + 3)
             elif message.startswith("No hallucinations detected"):
-                current = max(current, 88)
+                current = max(current, 68)
             elif message.startswith("Transcript complete"):
-                current = max(current, 90)
+                current = max(current, 69)
             p.update({
                 "phase": "transcribing",
                 "percent": current,
@@ -685,6 +687,86 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
         _emit(job_id, "eof")
 
 
+def _run_job_resume(job_id: str, transcript: str, server_id: str = "default",
+                    backend: str = "ollama"):
+    """Re-run only the minutes generation step for a job whose transcript is already saved."""
+    cancel_event = _jobs[job_id]["cancel_event"]
+    from summarize_meeting import generate_minutes, unload_ollama_model, OLLAMA_MODEL
+
+    server   = load_servers().get(server_id, {})
+    _ollama_model = server.get("ollama_model") or None
+    _ollama_url   = server.get("ollama_url")   or None
+
+    def emit_cb(event_type, **data):
+        _emit(job_id, event_type, **data)
+
+    def log(msg: str, level: str = "info"):
+        _emit(job_id, "log", message=msg, level=level)
+
+    def progress(percent, label, detail="", phase=None):
+        _emit(job_id, "progress", percent=percent, label=label, detail=detail,
+              phase=phase or "generating")
+
+    with _jobs_lock:
+        job = _jobs[job_id]
+        job["status"] = "generating"
+    _emit(job_id, "status", status="generating")
+    progress(93, "Generating minutes", detail="Drafting summary", phase="generating")
+    log("Resuming: generating minutes from saved transcript…")
+
+    meeting_name = job.get("meeting_name", "")
+    with _jobs_lock:
+        job = _jobs[job_id]
+
+    # Reload org context from metadata if available
+    try:
+        meta = json.loads(_job_metadata_path(job_id).read_text(encoding="utf-8"))
+    except Exception:
+        meta = {}
+
+    try:
+        if cancel_event.is_set():
+            log("Job cancelled.")
+            return
+
+        minutes = generate_minutes(
+            transcript,
+            names="",
+            context="",
+            backend=backend,
+            ollama_model=_ollama_model or OLLAMA_MODEL,
+            emit_callback=emit_cb,
+            ollama_url=_ollama_url,
+            associated_context="",
+            roster="",
+            cancel_event=cancel_event,
+        )
+
+        if cancel_event.is_set():
+            log("Job cancelled.")
+            return
+
+        _emit(job_id, "result", minutes=minutes, transcript=transcript,
+              meeting_name=meeting_name)
+        progress(100, "Complete", detail="Minutes generated", phase="done")
+        log("Done.")
+
+    except Exception as exc:
+        if cancel_event.is_set():
+            log("Job cancelled.")
+            _emit(job_id, "progress", **_default_progress("cancelled"))
+        else:
+            log(f"Error: {exc}", level="error")
+            _emit(job_id, "error", message=str(exc))
+    finally:
+        if backend == "ollama":
+            try:
+                unload_ollama_model(_ollama_model or OLLAMA_MODEL, ollama_url=_ollama_url)
+            except Exception:
+                pass
+        _emit(job_id, "eof")
+
+
 # ── Job queue worker (sequential execution) ──────────────────────────────────
 
 def _queue_worker():
@@ -699,6 +781,23 @@ def _queue_worker():
                 with _jobs_lock:
                     job["status"] = "cancelled"
                     job["error"]  = "Cancelled before starting"
+                continue
+            pending_resume = job.pop("_pending_resume", None)
+            if pending_resume is not None:
+                try:
+                    _run_job_resume(job_id, **pending_resume)
+                except Exception as exc:
+                    message = f"Resume failed: {exc}"
+                    print(f"  [{job_id[:8]}] {message}")
+                    with _jobs_lock:
+                        job = _jobs.get(job_id)
+                        if job:
+                            job["logs"].append(message)
+                            job["error"] = message
+                            job["status"] = "error"
+                    _emit(job_id, "log", message=message, level="error")
+                    _emit(job_id, "error", message=message)
+                    _emit(job_id, "eof")
                 continue
             pending = job.pop("_pending_args", None)
             if pending is None:
@@ -1188,6 +1287,43 @@ def api_cancel_job(job_id: str):
     _emit(job_id, "status", status="cancelled")
     _emit(job_id, "eof")
     return jsonify({"ok": True})
+
+
+@app.route("/api/jobs/<job_id>/resume", methods=["POST"])
+def api_resume_job(job_id: str):
+    """Re-run the minutes generation step for a failed/cancelled job that has a saved transcript."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Not found"}), 404
+    if job["status"] not in ("error", "cancelled"):
+        return jsonify({"error": "Only failed or cancelled jobs can be resumed"}), 400
+    transcript = job.get("transcript") or _read_job_artifact(job_id, job.get("transcript_file"))
+    if not transcript:
+        return jsonify({"error": "No saved transcript — full resubmission required"}), 400
+
+    data = request.get_json(silent=True) or {}
+    server_id  = data.get("server_id", "default")
+    backend    = data.get("backend", "ollama")
+
+    # Reset job state for re-run
+    with _jobs_lock:
+        job["status"]       = "queued"
+        job["error"]        = None
+        job["result_md"]    = None
+        job["minutes_file"] = None
+        job["cancel_event"] = threading.Event()
+        job["progress"]     = _default_progress("queued")
+    _persist_job(job_id)
+
+    with _jobs_lock:
+        job["_pending_resume"] = {
+            "transcript": transcript,
+            "server_id":  server_id,
+            "backend":    backend,
+        }
+    _run_queue.put(job_id)
+    return jsonify({"ok": True, "job_id": job_id})
 
 
 @app.route("/api/jobs/<job_id>", methods=["DELETE"])

@@ -566,13 +566,17 @@ def generate_minutes_ollama(transcript: str, names: str, context: str,
                             roster: str = "", cancel_event=None) -> str:
     """Generate minutes using a local Ollama model (streaming for tok/s stats and cancellation)."""
     url = ollama_url or OLLAMA_URL
-    if emit_callback:
-        try:
-            emit_callback("log", message=f"Sending transcript to Ollama ({model})...", level="info")
-        except Exception:
-            pass
+
+    def _log(msg, level="info"):
+        print(f"  {msg}")
+        if emit_callback:
+            try:
+                emit_callback("log", message=msg, level=level)
+            except Exception:
+                pass
+
+    _log(f"Sending transcript to Ollama ({model})...")
     user_content = _build_user_content(transcript, names, context, associated_context, roster)
-    print(f"  Sending transcript to Ollama ({model}) ...")
     resp = requests.post(
         f"{url}/api/chat",
         json={
@@ -586,6 +590,32 @@ def generate_minutes_ollama(transcript: str, names: str, context: str,
         stream=True,
         timeout=3600,
     )
+
+    # Auto-pull missing model then retry once
+    if resp.status_code == 404 and "not found" in resp.text.lower():
+        _log(f"Ollama model '{model}' not found — pulling now (this may take several minutes) ...")
+        pull = requests.post(
+            f"{url}/api/pull",
+            json={"name": model, "stream": False},
+            timeout=1800,
+        )
+        if pull.status_code != 200:
+            raise RuntimeError(f"Ollama pull failed ({pull.status_code}):\n{pull.text[:300]}")
+        _log(f"Ollama model '{model}' downloaded and ready. Retrying generation ...")
+        resp = requests.post(
+            f"{url}/api/chat",
+            json={
+                "model": model,
+                "stream": True,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user",   "content": user_content},
+                ],
+            },
+            stream=True,
+            timeout=3600,
+        )
+
     if resp.status_code != 200:
         raise RuntimeError(f"Ollama request failed ({resp.status_code}):\n{resp.text[:500]}")
 

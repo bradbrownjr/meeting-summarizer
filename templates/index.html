@@ -720,6 +720,7 @@
       </div>
       <div style="display:flex;gap:.5rem;flex-shrink:0">
         <button id="back-btn" class="btn btn-outline" style="font-size:.82rem;padding:.35rem .85rem" title="Return to form (job keeps running)">&#8592; Back</button>
+        <button id="resume-btn" class="btn btn-outline" style="font-size:.82rem;padding:.35rem .85rem;display:none" title="Retry minutes generation using saved transcript">&#8635; Retry Minutes</button>
         <button id="cancel-btn" class="btn" style="background:var(--danger);color:#fff;font-size:.82rem;padding:.35rem .85rem" title="Cancel this job">&#10005; Cancel</button>
       </div>
     </div>
@@ -1348,6 +1349,33 @@ document.getElementById("cancel-btn").addEventListener("click", async () => {
   // SSE will handle status:cancelled event and return to form
 });
 
+document.getElementById("resume-btn").addEventListener("click", async () => {
+  if (!currentJobId) return;
+  const resumeBtn = document.getElementById("resume-btn");
+  resumeBtn.disabled = true;
+  resumeBtn.textContent = "Queuing…";
+  const resp = await fetch(`/api/jobs/${currentJobId}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ backend: "ollama" }),
+  });
+  const json = await resp.json();
+  if (!json.ok) {
+    showError(json.error || "Resume failed");
+    resumeBtn.disabled = false;
+    resumeBtn.textContent = "↺ Retry Minutes";
+    return;
+  }
+  // Hide resume, show cancel, clear error banner, reconnect SSE
+  resumeBtn.style.display = "none";
+  document.getElementById("cancel-btn").style.display = "";
+  showError("");
+  document.getElementById("log-box").innerHTML = "";
+  updateDetailProgress({ percent: 0, label: "Queued", detail: "", phase: "queued" });
+  setStatus("Queued…");
+  listenSSE(currentJobId);
+});
+
 // ── Submit ─────────────────────────────────────────────────────────────────
 submitBtn.addEventListener("click", async () => {
   if (!selectedFile) return;
@@ -1420,7 +1448,11 @@ function listenSSE(jobId) {
       showResults(jobId, evt.data.minutes, evt.data.transcript, evt.data.meeting_name);
     } else if (evt.type === "error") {
       es.close(); _activeES = null;
-      showJobFailure(jobId, evt.data.message || "An error occurred.");
+      // Check if transcript is saved so we can offer resume
+      fetch(`/api/jobs/${jobId}`).then(r => r.ok ? r.json() : {}).then(j => {
+        showJobFailure(jobId, evt.data.message || "An error occurred.", true,
+                       !!(j.transcript_file || j.transcript));
+      }).catch(() => showJobFailure(jobId, evt.data.message || "An error occurred."));
     } else if (evt.type === "eof") {
       es.close(); _activeES = null;
     }
@@ -1431,7 +1463,7 @@ function listenSSE(jobId) {
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(j => {
         if (j.status === "done")        showResults(jobId, j.result_md, j.transcript, j.meeting_name);
-        else if (j.status === "error")     showJobFailure(jobId, j.error || "Unknown error");
+        else if (j.status === "error")     showJobFailure(jobId, j.error || "Unknown error", true, !!(j.transcript_file || j.transcript));
         else if (j.status === "cancelled") {
           showFormError("Job was cancelled.");
         }
@@ -1532,7 +1564,7 @@ function showFormError(msg) {
   showError(msg);
 }
 
-function showJobFailure(jobId, msg, appendToLog = true) {
+function showJobFailure(jobId, msg, appendToLog = true, hasTranscript = false) {
   document.getElementById("form-section").style.display     = "none";
   document.getElementById("result-section").style.display   = "none";
   document.getElementById("progress-section").style.display = "block";
@@ -1547,6 +1579,12 @@ function showJobFailure(jobId, msg, appendToLog = true) {
       history.replaceState({jobId}, '', `?job=${encodeURIComponent(jobId)}`);
     }
   }
+  // Hide cancel, show resume button if transcript is available
+  document.getElementById("cancel-btn").style.display  = "none";
+  const resumeBtn = document.getElementById("resume-btn");
+  resumeBtn.style.display   = hasTranscript ? "" : "none";
+  resumeBtn.disabled        = false;
+  resumeBtn.textContent     = "↺ Retry Minutes";
   updateDetailProgress({ percent: 100, label: "Failed", detail: msg || "Job failed" });
   setStatus("Failed");
   if (appendToLog && msg) appendLog(msg, "error");
@@ -1697,7 +1735,7 @@ if (!new URLSearchParams(window.location.search).get("job")) {
         showResults(jobId, j.result_md, j.transcript, j.meeting_name);
       } else if (j.status === "error") {
         (j.logs || []).forEach(m => appendLog(m, "info"));
-        showJobFailure(jobId, j.error || "Job failed.", false);
+        showJobFailure(jobId, j.error || "Job failed.", false, !!(j.transcript_file || j.transcript));
       } else if (j.status === "cancelled") {
         showFormError(j.error || "Job failed.");
       } else {
