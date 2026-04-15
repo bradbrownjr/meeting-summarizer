@@ -11,7 +11,7 @@ services:
       - /mnt/user/appdata/meeting-summarizer/templates:/templates
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - UPLOAD_DIR=/tmp/meeting_uploads
+      - UPLOAD_DIR=/data/jobs
       - DATA_DIR=/data
       - TEMPLATES_DIR=/templates
       - WEB_PORT=8082
