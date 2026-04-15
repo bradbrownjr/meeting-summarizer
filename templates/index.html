@@ -550,48 +550,26 @@
       <input type="text" id="names-input" placeholder="e.g. Amy, Brad, John Smith" />
     </div>
 
+    <!-- Previous Minutes (collapsible) -->
+    <details id="prev-minutes-details">
+      <summary style="cursor:pointer;font-size:.85rem;color:var(--muted);margin-top:.25rem;margin-bottom:.5rem">
+        &#128196; Previous minutes <span style="font-style:italic;font-weight:400">(optional &mdash; improves old/new business continuity)</span>
+      </summary>
+      <div class="field" style="margin-top:.5rem">
+        <label>Last month's minutes <span class="hint">Paste below or load a file. Gives the AI context for topics, names, and call signs carried over from the prior meeting.</span></label>
+        <textarea id="prev-minutes-textarea" rows="5"
+          placeholder="Paste previous meeting minutes here&#x2026;"></textarea>
+        <div style="margin-top:.4rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+          <button class="btn btn-outline" type="button" id="prev-minutes-file-btn" style="font-size:.85rem;padding:.4rem .9rem">&#128194; Load file (.txt .md .pdf .docx)</button>
+          <span id="prev-minutes-file-name"></span>
+        </div>
+        <input type="file" id="prev-minutes-file-input" accept=".txt,.md,.pdf,.docx" style="display:none" />
+      </div>
+    </details>
+
     <!-- Advanced -->
     <details>
       <summary>Advanced options</summary>
-
-      <div class="field">
-        <label>Server</label>
-        <select id="server-input"></select>
-        <button id="manage-servers-toggle" type="button" class="manage-link">Manage servers</button>
-      </div>
-
-      <!-- Manage servers panel -->
-      <div id="manage-servers-panel" style="display:none;margin-bottom:1rem">
-        <div id="server-list"></div>
-        <div style="margin-top:.75rem">
-          <button class="btn btn-outline" type="button" id="add-server-btn">+ Add server</button>
-        </div>
-        <div id="server-editor" style="display:none;margin-top:1rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:1rem">
-          <h4 id="server-editor-title" style="font-size:.9rem;font-weight:700;margin-bottom:.75rem">New Server</h4>
-          <div class="field">
-            <label>Name</label>
-            <input type="text" id="sed-label" placeholder="e.g. Home Server (CPU)" />
-          </div>
-          <div class="field">
-            <label>Whisper API URL</label>
-            <input type="text" id="sed-whisper-url" placeholder="http://server:8001" />
-          </div>
-          <div class="field">
-            <label>Whisper Model <span class="hint">Leave blank to use server default</span></label>
-            <input type="text" id="sed-whisper-model" placeholder="Systran/faster-distil-whisper-large-v3" />
-          </div>
-          <div class="field">
-            <label>Ollama URL</label>
-            <input type="text" id="sed-ollama-url" placeholder="http://server:11434" />
-          </div>
-          <div class="editor-actions">
-            <button class="btn btn-primary" type="button" id="save-server-btn">Save</button>
-            <button class="btn btn-ghost" type="button" id="cancel-server-btn">Cancel</button>
-            <button class="btn btn-danger" type="button" id="delete-server-btn" style="display:none;margin-left:auto">Delete</button>
-          </div>
-        </div>
-      </div>
-
       <div class="field">
         <label>Minutes Backend</label>
         <select id="backend-input">
@@ -599,10 +577,6 @@
           <option value="ollama" {% if default_backend == 'ollama' %}selected{% endif %}>Ollama (local LLM)</option>
           <option value="transcript_only" {% if default_backend == 'transcript_only' %}selected{% endif %}>Transcript only (no summary)</option>
         </select>
-      </div>
-      <div class="field" id="ollama-model-field" style="display:{% if default_backend == 'ollama' %}block{% else %}none{% endif %}">
-        <label>Ollama Model</label>
-        <input type="text" id="ollama-model-input" value="{{ default_ollama_model }}" placeholder="gemma4:e4b" />
       </div>
     </details>
   </div>
@@ -620,17 +594,48 @@
            accept=".mp3,.m4a,.wav,.ogg,.flac,.aac,.wma,.opus" />
   </div>
 
+  <!-- Server card -->
   <div class="card">
-    <h2>&#128196; Previous Minutes <span style="font-size:.8rem;font-weight:400;color:var(--muted)">(optional)</span></h2>
+    <h2>&#9881; Server</h2>
     <div class="field">
-      <label>Last month's minutes <span class="hint">Gives the AI context for old/new business continuity, member names, and call signs</span></label>
-      <textarea id="prev-minutes-textarea" rows="5"
-        placeholder="Paste previous meeting minutes here, or use the button below to load a .txt / .md file&#x2026;"></textarea>
-      <div style="margin-top:.4rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
-        <button class="btn btn-outline" type="button" id="prev-minutes-file-btn">&#128194; Load from file</button>
-        <span id="prev-minutes-file-name"></span>
+      <label>Transcription &amp; LLM Server</label>
+      <select id="server-input"></select>
+      <button id="manage-servers-toggle" type="button" class="manage-link">Manage servers</button>
+    </div>
+
+    <div id="manage-servers-panel" style="display:none;margin-top:.75rem">
+      <div id="server-list"></div>
+      <div style="margin-top:.75rem">
+        <button class="btn btn-outline" type="button" id="add-server-btn">+ Add server</button>
       </div>
-      <input type="file" id="prev-minutes-file-input" accept=".txt,.md" style="display:none" />
+      <div id="server-editor" style="display:none;margin-top:1rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:1rem">
+        <h4 id="server-editor-title" style="font-size:.9rem;font-weight:700;margin-bottom:.75rem">New Server</h4>
+        <div class="field">
+          <label>Name</label>
+          <input type="text" id="sed-label" placeholder="e.g. Home Server (96 GB RAM)" />
+        </div>
+        <div class="field">
+          <label>Whisper API URL</label>
+          <input type="text" id="sed-whisper-url" placeholder="http://server:8001" />
+        </div>
+        <div class="field">
+          <label>Whisper Model <span class="hint">Leave blank to use server default</span></label>
+          <input type="text" id="sed-whisper-model" placeholder="Systran/faster-distil-whisper-large-v3" />
+        </div>
+        <div class="field">
+          <label>Ollama URL</label>
+          <input type="text" id="sed-ollama-url" placeholder="http://server:11434" />
+        </div>
+        <div class="field">
+          <label>Ollama Model <span class="hint">Model used on this server for minutes generation</span></label>
+          <input type="text" id="sed-ollama-model" placeholder="e.g. gemma4:27b" />
+        </div>
+        <div class="editor-actions">
+          <button class="btn btn-primary" type="button" id="save-server-btn">Save</button>
+          <button class="btn btn-ghost" type="button" id="cancel-server-btn">Cancel</button>
+          <button class="btn btn-danger" type="button" id="delete-server-btn" style="display:none;margin-left:auto">Delete</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -696,12 +701,13 @@ document.getElementById("theme-toggle").addEventListener("click", () => {
 });
 
 // ── State ──────────────────────────────────────────────────────────────────
-let orgs           = {};
-let servers        = {{ initial_servers | tojson }};
-let selectedOrg    = null;
-let selectedFile   = null;
-let currentJobId   = null;
-let editingOrgId   = null;
+let orgs            = {};
+let servers         = {{ initial_servers | tojson }};
+let selectedOrg     = null;
+let selectedFile    = null;
+let selectedPrevFile = null;
+let currentJobId    = null;
+let editingOrgId    = null;
 let editingServerId = null;
 
 // ── Init ───────────────────────────────────────────────────────────────────
@@ -799,6 +805,7 @@ document.getElementById("save-server-btn").addEventListener("click", async () =>
     whisper_url:   document.getElementById("sed-whisper-url").value.trim(),
     whisper_model: document.getElementById("sed-whisper-model").value.trim(),
     ollama_url:    document.getElementById("sed-ollama-url").value.trim(),
+    ollama_model:  document.getElementById("sed-ollama-model").value.trim(),
   };
   if (!payload.label) { alert("Name is required."); return; }
   let resp;
@@ -845,11 +852,13 @@ function openServerEditor(id) {
     document.getElementById("sed-whisper-url").value   = s.whisper_url   || "";
     document.getElementById("sed-whisper-model").value = s.whisper_model || "";
     document.getElementById("sed-ollama-url").value    = s.ollama_url    || "";
+    document.getElementById("sed-ollama-model").value  = s.ollama_model  || "";
   } else {
     document.getElementById("sed-label").value         = "";
     document.getElementById("sed-whisper-url").value   = "";
     document.getElementById("sed-whisper-model").value = "";
     document.getElementById("sed-ollama-url").value    = "";
+    document.getElementById("sed-ollama-model").value  = "";
   }
   document.getElementById("sed-label").focus();
 }
@@ -1025,12 +1034,22 @@ document.getElementById("prev-minutes-file-btn").addEventListener("click", () =>
 document.getElementById("prev-minutes-file-input").addEventListener("change", e => {
   const f = e.target.files[0];
   if (!f) return;
-  const reader = new FileReader();
-  reader.onload = ev => {
-    document.getElementById("prev-minutes-textarea").value = ev.target.result;
-    document.getElementById("prev-minutes-file-name").textContent = "\u2714 " + f.name;
-  };
-  reader.readAsText(f);
+  const ext = f.name.split(".").pop().toLowerCase();
+  if (ext === "txt" || ext === "md") {
+    // Text files: load into textarea so user can see and edit
+    const reader = new FileReader();
+    reader.onload = ev => {
+      document.getElementById("prev-minutes-textarea").value = ev.target.result;
+      document.getElementById("prev-minutes-file-name").textContent = "\u2714 " + f.name;
+      selectedPrevFile = null;
+    };
+    reader.readAsText(f);
+  } else {
+    // PDF/DOCX: store file for server-side extraction, can't show in textarea
+    selectedPrevFile = f;
+    document.getElementById("prev-minutes-textarea").value = "";
+    document.getElementById("prev-minutes-file-name").textContent = "\u2714 " + f.name + " (will be parsed on submit)";
+  }
   e.target.value = "";
 });
 
@@ -1051,10 +1070,7 @@ document.getElementById("roster-file-input").addEventListener("change", e => {
 });
 
 // ── Backend toggle ─────────────────────────────────────────────────────────
-document.getElementById("backend-input").addEventListener("change", e => {
-  document.getElementById("ollama-model-field").style.display =
-    e.target.value === "ollama" ? "block" : "none";
-});
+// (no per-page fields to show/hide; Ollama model is now per-server)
 
 // ── Drop zone ──────────────────────────────────────────────────────────────
 const dropZone  = document.getElementById("drop-zone");
@@ -1087,15 +1103,18 @@ submitBtn.addEventListener("click", async () => {
   showError("");
 
   const fd = new FormData();
-  fd.append("audio",        selectedFile);
-  fd.append("org",          document.getElementById("org-input").value);
-  fd.append("date",         document.getElementById("date-input").value);
-  fd.append("names",        document.getElementById("names-input").value.trim());
-  fd.append("backend",      document.getElementById("backend-input").value);
-  fd.append("ollama_model", document.getElementById("ollama-model-input").value.trim());
-  fd.append("server_id",    document.getElementById("server-input").value);
-  const prevText = document.getElementById("prev-minutes-textarea").value.trim();
-  if (prevText) fd.append("prev_minutes_text", prevText);
+  fd.append("audio",     selectedFile);
+  fd.append("org",       document.getElementById("org-input").value);
+  fd.append("date",      document.getElementById("date-input").value);
+  fd.append("names",     document.getElementById("names-input").value.trim());
+  fd.append("backend",   document.getElementById("backend-input").value);
+  fd.append("server_id", document.getElementById("server-input").value);
+  if (selectedPrevFile) {
+    fd.append("prev_minutes_file", selectedPrevFile);
+  } else {
+    const prevText = document.getElementById("prev-minutes-textarea").value.trim();
+    if (prevText) fd.append("prev_minutes_text", prevText);
+  }
 
   document.getElementById("form-section").style.display     = "none";
   document.getElementById("progress-section").style.display = "block";

@@ -19,6 +19,30 @@ import yaml
 from flask import Flask, Response, jsonify, render_template, request, send_file
 
 
+# ── Previous-minutes text extraction ─────────────────────────────────────────
+
+def _extract_prev_minutes(f) -> str:
+    """Extract plain text from an uploaded .txt, .md, .pdf, or .docx file."""
+    suffix = Path(f.filename).suffix.lower()
+    raw = f.read()
+    if suffix in (".txt", ".md"):
+        return raw.decode("utf-8", errors="replace").strip()
+    if suffix == ".pdf":
+        import io
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(raw)) as pdf:
+            return "\n".join(
+                page.extract_text() or "" for page in pdf.pages
+            ).strip()
+    if suffix == ".docx":
+        import io
+        from docx import Document
+        doc = Document(io.BytesIO(raw))
+        return "\n".join(p.text for p in doc.paragraphs if p.text).strip()
+    # Fallback for unexpected types
+    return raw.decode("utf-8", errors="replace").strip()
+
+
 # ── Data directory (orgs.json lives here) ────────────────────────────────────
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent / "data"))
@@ -181,6 +205,7 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
     _whisper_url   = server.get("whisper_url")   or None
     _whisper_model = server.get("whisper_model") or None
     _ollama_url    = server.get("ollama_url")    or None
+    _ollama_model  = server.get("ollama_model")  or None
 
     try:
         _emit(job_id, "status", status="transcribing")
@@ -249,7 +274,7 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
             names=names,
             context=context,
             backend=backend,
-            ollama_model=ollama_model or OLLAMA_MODEL,
+            ollama_model=_ollama_model or OLLAMA_MODEL,
             emit_callback=emit_cb,
             ollama_url=_ollama_url,
             prev_minutes=prev_minutes,
@@ -372,6 +397,7 @@ def api_servers_create():
         "whisper_url":   data.get("whisper_url", "").strip(),
         "whisper_model": data.get("whisper_model", "").strip(),
         "ollama_url":    data.get("ollama_url", "").strip(),
+        "ollama_model":  data.get("ollama_model", "").strip(),
     }
     save_servers(servers)
     return jsonify({"ok": True, "id": server_id, "servers": servers})
@@ -390,6 +416,7 @@ def api_servers_update(server_id: str):
         "whisper_url":   data.get("whisper_url", "").strip(),
         "whisper_model": data.get("whisper_model", "").strip(),
         "ollama_url":    data.get("ollama_url", "").strip(),
+        "ollama_model":  data.get("ollama_model", "").strip(),
     }
     save_servers(servers)
     return jsonify({"ok": True, "servers": servers})
@@ -555,14 +582,14 @@ def api_run():
     ollama_model = request.form.get("ollama_model", "")
     server_id    = request.form.get("server_id", "default")
 
-    # Optional previous minutes: either pasted text or an uploaded .txt/.md file
+    # Optional previous minutes: paste text or uploaded file (.txt, .md, .pdf, .docx)
     prev_minutes = ""
     prev_file = request.files.get("prev_minutes_file")
     if prev_file and prev_file.filename:
         try:
-            prev_minutes = prev_file.read().decode("utf-8", errors="replace").strip()
-        except Exception:
-            pass
+            prev_minutes = _extract_prev_minutes(prev_file)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"Could not read previous minutes: {exc}"}), 400
     if not prev_minutes:
         prev_minutes = request.form.get("prev_minutes_text", "").strip()
 
