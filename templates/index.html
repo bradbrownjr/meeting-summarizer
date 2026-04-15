@@ -1453,8 +1453,28 @@ if (!new URLSearchParams(window.location.search).get("job")) {
   shareLink.href        = shareHref;
   shareLink.textContent = shareHref;
   document.getElementById("share-hint").style.display = "block";
-  setStatus("Connecting\u2026");
-  listenSSE(jobId);
+  setStatus("Loading\u2026");
+
+  // Check current job state first; only open SSE if still running
+  fetch(`/api/jobs/${jobId}`)
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(j => {
+      if (j.status === "done") {
+        showResults(jobId, j.result_md, j.transcript, j.meeting_name);
+      } else if (j.status === "error") {
+        showFormError(j.error || "Job failed.");
+      } else {
+        // In-progress: replay logs then stream live
+        (j.logs || []).forEach(m => appendLog(m, "info"));
+        setStatus("Connecting\u2026");
+        listenSSE(jobId);
+      }
+    })
+    .catch(() => {
+      // Job not found or server error — try SSE anyway as fallback
+      setStatus("Connecting\u2026");
+      listenSSE(jobId);
+    });
 })();
 </script>
 </body>
