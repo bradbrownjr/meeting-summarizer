@@ -134,6 +134,7 @@ import queue as _queue
 
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
+_run_queue: _queue.Queue = _queue.Queue()  # sequential job execution
 
 
 def _new_job() -> str:
@@ -148,6 +149,7 @@ def _new_job() -> str:
             "error": None,
             "subscribers": [],  # one Queue per active SSE connection
             "created_at": time.time(),
+            "cancel_event": threading.Event(),  # set to cancel this job
         }
     return job_id
 
@@ -187,6 +189,7 @@ def _emit(job_id: str, event_type: str, **data):
 def _run_job(job_id: str, audio_path: Path, org_id: str,
              date_str: str, names: str, backend: str, ollama_model: str,
              server_id: str = "default", prev_minutes: str = ""):
+    cancel_event = _jobs[job_id]["cancel_event"]
     from summarize_meeting import (
         transcribe, build_clean_transcript, generate_minutes,
         unload_whisper_model, unload_ollama_model,
@@ -271,6 +274,11 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
         if org_roster:
             log(f"Roster: {len([l for l in org_roster.splitlines() if l.strip()])} members loaded.")
 
+        # Check for cancellation before starting LLM generation
+        if cancel_event.is_set():
+            log("Job cancelled before minutes generation.")
+            return
+
         minutes = generate_minutes(
             transcript,
             names=names,
@@ -281,13 +289,23 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
             ollama_url=_ollama_url,
             prev_minutes=prev_minutes,
             roster=org_roster,
+            cancel_event=cancel_event,
         )
+
+        # Check for cancellation after generation (covers Ollama mid-stream cancel)
+        if cancel_event.is_set():
+            log("Job cancelled.")
+            return
+
         _emit(job_id, "result", minutes=minutes, transcript=transcript, meeting_name=meeting_name)
         log("Done.")
 
     except Exception as exc:
-        log(f"Error: {exc}", level="error")
-        _emit(job_id, "error", message=str(exc))
+        if cancel_event.is_set():
+            log("Job cancelled.")
+        else:
+            log(f"Error: {exc}", level="error")
+            _emit(job_id, "error", message=str(exc))
 
     finally:
         try:
@@ -302,14 +320,34 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
         for p in cleanup:
             if p.exists():
                 p.unlink()
-        # Signal SSE stream to close
-        with _jobs_lock:
-            job = _jobs.get(job_id)
-        if job:
-            try:
-                job["q"].put_nowait({"type": "eof", "data": {}})
-            except _queue.Full:
-                pass
+        # Signal SSE stream to close (no-op if cancel endpoint already sent eof)
+        _emit(job_id, "eof")
+
+
+# ── Job queue worker (sequential execution) ──────────────────────────────────
+
+def _queue_worker():
+    while True:
+        job_id = _run_queue.get()
+        try:
+            with _jobs_lock:
+                job = _jobs.get(job_id)
+            if not job:
+                continue
+            if job["cancel_event"].is_set():
+                with _jobs_lock:
+                    job["status"] = "cancelled"
+                    job["error"]  = "Cancelled before starting"
+                continue
+            pending = job.pop("_pending_args", None)
+            if pending is None:
+                continue
+            _run_job(job_id, *pending["args"], **pending["kwargs"])
+        finally:
+            _run_queue.task_done()
+
+
+threading.Thread(target=_queue_worker, daemon=True, name="job-worker").start()
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -600,17 +638,34 @@ def api_run():
     dest.parent.mkdir(parents=True, exist_ok=True)
     audio.save(dest)
 
-    threading.Thread(
-        target=_run_job,
-        args=(job_id, dest, org_id, date_str, names, backend, ollama_model, server_id),
-        kwargs={"prev_minutes": prev_minutes},
-        daemon=True,
-    ).start()
+    with _jobs_lock:
+        _jobs[job_id]["_pending_args"] = {
+            "args": (dest, org_id, date_str, names, backend, ollama_model, server_id),
+            "kwargs": {"prev_minutes": prev_minutes},
+        }
+    _run_queue.put(job_id)
 
     return jsonify({"ok": True, "job_id": job_id})
 
 
 # ── Service health checks ─────────────────────────────────────────────────────
+
+@app.route("/api/servers/<server_id>/vram")
+def api_server_vram(server_id: str):
+    """Proxy VRAM info from Ollama /api/ps."""
+    server = load_servers().get(server_id)
+    if not server:
+        return jsonify({"error": "Not found"}), 404
+    url = (server.get("ollama_url") or "").rstrip("/")
+    if not url:
+        return jsonify({"ok": False, "error": "No Ollama URL configured"})
+    try:
+        r = requests.get(f"{url}/api/ps", timeout=5)
+        data = r.json()
+        return jsonify({"ok": True, "models": data.get("models", [])})
+    except requests.RequestException as e:
+        return jsonify({"ok": False, "error": str(e)})
+
 
 @app.route("/api/health/whisper")
 def api_health_whisper():
@@ -657,7 +712,33 @@ def api_jobs_list():
             for jid, j in _jobs.items()
         ]
     snapshot.sort(key=lambda x: x["created_at"], reverse=True)
+    # Add queue positions for waiting jobs
+    queued = sorted([j for j in snapshot if j["status"] == "queued"],
+                    key=lambda j: j["created_at"])
+    pos_map = {j["job_id"]: i + 1 for i, j in enumerate(queued)}
+    total_q = len(queued)
+    for j in snapshot:
+        j["queue_pos"]   = pos_map.get(j["job_id"])
+        j["queue_total"] = total_q if j["job_id"] in pos_map else None
     return jsonify(snapshot)
+
+
+@app.route("/api/jobs/<job_id>/cancel", methods=["POST"])
+def api_cancel_job(job_id: str):
+    """Cancel a queued or running job."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Not found"}), 404
+    if job["status"] in ("done", "error", "cancelled"):
+        return jsonify({"error": "Job already finished"}), 400
+    job["cancel_event"].set()
+    with _jobs_lock:
+        job["status"]  = "cancelled"
+        job["error"]   = "Cancelled by user"
+    _emit(job_id, "status", status="cancelled")
+    _emit(job_id, "eof")
+    return jsonify({"ok": True})
 
 
 @app.route("/api/jobs/<job_id>/stream")

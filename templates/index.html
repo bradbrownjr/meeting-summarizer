@@ -639,6 +639,9 @@
       <span class="svc-dot" id="svc-ollama-dot"></span>
       <span id="svc-ollama-label">Ollama &mdash; checking&hellip;</span>
     </div>
+    <div class="svc-row" id="svc-vram-row" style="display:none">
+      <span style="font-size:.82rem;color:var(--muted)">&#128230; VRAM: <span id="svc-vram-label">&#8212;</span></span>
+    </div>
 
     <div id="manage-servers-panel" style="display:none;margin-top:.75rem">
       <div id="server-list"></div>
@@ -683,9 +686,15 @@
 <div id="progress-section">
   <div class="card">
     <h2>&#9881; Processing</h2>
-    <div class="status-bar">
-      <div class="spinner"></div>
-      <span id="status-text">Starting&hellip;</span>
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem;margin-bottom:.35rem">
+      <div class="status-bar" style="flex:1;min-width:0">
+        <div class="spinner"></div>
+        <span id="status-text">Starting&hellip;</span>
+      </div>
+      <div style="display:flex;gap:.5rem;flex-shrink:0">
+        <button id="back-btn" class="btn btn-outline" style="font-size:.82rem;padding:.35rem .85rem" title="Return to form (job keeps running)">&#8592; Back</button>
+        <button id="cancel-btn" class="btn" style="background:var(--danger);color:#fff;font-size:.82rem;padding:.35rem .85rem" title="Cancel this job">&#10005; Cancel</button>
+      </div>
     </div>
     <div id="log-box"></div>
     <p id="share-hint" style="margin-top:.85rem;font-size:.82rem;color:var(--muted);display:none">
@@ -882,6 +891,31 @@ async function checkServerHealth() {
     }
   } else {
     ollamaRow.style.display = "none";
+  }
+
+  // VRAM (Ollama /api/ps)
+  const vramRow   = document.getElementById("svc-vram-row");
+  const vramLabel = document.getElementById("svc-vram-label");
+  if (backend === "ollama" && s && s.ollama_url) {
+    vramRow.style.display = "flex";
+    vramLabel.textContent = "\u2026";
+    try {
+      const vr = await fetch(`/api/servers/${encodeURIComponent(sid)}/vram`, { signal: AbortSignal.timeout(6000) });
+      const vd = await vr.json();
+      if (!vd.ok || !vd.models || vd.models.length === 0) {
+        vramLabel.textContent = "no models loaded";
+      } else {
+        vramLabel.textContent = vd.models.map(m => {
+          const name = m.model || m.name || "?";
+          const gb   = m.size_vram != null ? ` (${(m.size_vram / 1073741824).toFixed(1)} GB)` : "";
+          return name + gb;
+        }).join(", ");
+      }
+    } catch {
+      vramLabel.textContent = "unavailable";
+    }
+  } else {
+    vramRow.style.display = "none";
   }
 }
 
@@ -1209,6 +1243,19 @@ function setFile(file) {
 document.getElementById("audio-file-btn").addEventListener("click", () => fileInput.click());
 fileInput.addEventListener("change", e => { if (e.target.files[0]) setFile(e.target.files[0]); });
 
+// ── Back + Cancel buttons ───────────────────────────────────────────
+document.getElementById("back-btn").addEventListener("click", () => {
+  if (_activeES) { _activeES.close(); _activeES = null; }
+  document.getElementById("progress-section").style.display = "none";
+  document.getElementById("form-section").style.display     = "block";
+});
+
+document.getElementById("cancel-btn").addEventListener("click", async () => {
+  if (!currentJobId) return;
+  await fetch(`/api/jobs/${currentJobId}/cancel`, { method: "POST" });
+  // SSE will handle status:cancelled event and return to form
+});
+
 // ── Submit ─────────────────────────────────────────────────────────────────
 submitBtn.addEventListener("click", async () => {
   if (!selectedFile) return;
@@ -1256,7 +1303,9 @@ submitBtn.addEventListener("click", async () => {
 
 // ── SSE ────────────────────────────────────────────────────────────────────
 function listenSSE(jobId) {
-  const es = new EventSource(`/api/jobs/${jobId}/stream`);
+  if (_activeES) { _activeES.close(); _activeES = null; }
+  _activeES = new EventSource(`/api/jobs/${jobId}/stream`);
+  const es = _activeES;
   es.onmessage = e => {
     let evt;
     try { evt = JSON.parse(e.data); } catch { return; }
@@ -1267,23 +1316,34 @@ function listenSSE(jobId) {
       const s = evt.data.status;
       if      (s === "transcribing") setStatus("Transcribing audio\u2026");
       else if (s === "generating")   setStatus("Generating minutes\u2026");
+      else if (s === "cancelled") {
+        es.close(); _activeES = null;
+        document.getElementById("progress-section").style.display = "none";
+        document.getElementById("form-section").style.display     = "block";
+        showError("Job was cancelled.");
+      }
     } else if (evt.type === "result") {
-      es.close();
+      es.close(); _activeES = null;
       showResults(jobId, evt.data.minutes, evt.data.transcript, evt.data.meeting_name);
     } else if (evt.type === "error") {
-      es.close();
+      es.close(); _activeES = null;
       showFormError(evt.data.message || "An error occurred.");
     } else if (evt.type === "eof") {
-      es.close();
+      es.close(); _activeES = null;
     }
   };
   es.onerror = () => {
-    es.close();
+    es.close(); _activeES = null;
     fetch(`/api/jobs/${jobId}`)
       .then(r => r.json())
       .then(j => {
-        if (j.status === "done")  showResults(jobId, j.result_md, j.transcript, j.meeting_name);
-        else if (j.status === "error") showFormError(j.error || "Unknown error");
+        if (j.status === "done")      showResults(jobId, j.result_md, j.transcript, j.meeting_name);
+        else if (j.status === "error")     showFormError(j.error || "Unknown error");
+        else if (j.status === "cancelled") {
+          document.getElementById("progress-section").style.display = "none";
+          document.getElementById("form-section").style.display     = "block";
+          showError("Job was cancelled.");
+        }
       });
   };
 }
@@ -1392,15 +1452,17 @@ async function refreshActiveJobs() {
   card.style.display = "block";
   list.innerHTML = "";
   jobs.forEach(j => {
-    const isRunning = j.status !== "done" && j.status !== "error";
-    const badgeClass = j.status === "done" ? "badge-done"
-                     : j.status === "error" ? "badge-error"
+    const isActive = j.status !== "done" && j.status !== "error" && j.status !== "cancelled";
+    const badgeClass = j.status === "done"      ? "badge-done"
+                     : j.status === "error" || j.status === "cancelled" ? "badge-error"
                      : "badge-running";
-    const badgeLabel = j.status === "done"  ? "Done"
-                     : j.status === "error" ? "Error"
+    const queueInfo  = j.queue_pos ? ` (${j.queue_pos}/${j.queue_total})` : "";
+    const badgeLabel = j.status === "done"        ? "Done"
+                     : j.status === "error"       ? "Error"
+                     : j.status === "cancelled"   ? "Cancelled"
                      : j.status === "transcribing" ? "Transcribing\u2026"
                      : j.status === "generating"   ? "Generating\u2026"
-                     : "Queued";
+                     : `Queued${queueInfo}`;
     const name = j.meeting_name || "Unnamed job";
     const ago  = _timeAgo(j.created_at);
 
@@ -1409,14 +1471,14 @@ async function refreshActiveJobs() {
     row.innerHTML = `
       <span class="job-row-name">${escHtml(name)}<small>${escHtml(ago)}</small></span>
       <span class="job-status-badge ${badgeClass}">${badgeLabel}</span>
+      ${isActive ? `<button class="btn" style="background:var(--danger);color:#fff;font-size:.79rem;padding:.25rem .6rem;flex-shrink:0" onclick="cancelJob('${escHtml(j.job_id)}')">&#10005;</button>` : ""}
       <a class="btn btn-outline" href="?job=${encodeURIComponent(j.job_id)}"
-         style="padding:.35rem .8rem;font-size:.82rem">View</a>
+         style="padding:.35rem .8rem;font-size:.82rem;flex-shrink:0">View</a>
     `;
     list.appendChild(row);
   });
 
-  // Keep polling while any job is still running
-  const anyRunning = jobs.some(j => j.status !== "done" && j.status !== "error");
+  const anyRunning = jobs.some(j => j.status !== "done" && j.status !== "error" && j.status !== "cancelled");
   if (anyRunning && !_jobsPollTimer) {
     _jobsPollTimer = setInterval(refreshActiveJobs, 5000);
   } else if (!anyRunning) {
@@ -1426,6 +1488,11 @@ async function refreshActiveJobs() {
 
 function stopJobsPolling() {
   if (_jobsPollTimer) { clearInterval(_jobsPollTimer); _jobsPollTimer = null; }
+}
+
+async function cancelJob(jobId) {
+  await fetch(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+  await refreshActiveJobs();
 }
 
 function _timeAgo(ts) {
@@ -1464,9 +1531,14 @@ if (!new URLSearchParams(window.location.search).get("job")) {
       } else if (j.status === "error") {
         showFormError(j.error || "Job failed.");
       } else {
-        // In-progress: replay logs then stream live
+        // In-progress or queued: replay logs then stream live
         (j.logs || []).forEach(m => appendLog(m, "info"));
-        setStatus("Connecting\u2026");
+        if (j.status === "queued") {
+          const qPos = j.queue_pos ? ` (position ${j.queue_pos} of ${j.queue_total})` : "";
+          setStatus(`Waiting in queue${qPos}\u2026`);
+        } else {
+          setStatus("Connecting\u2026");
+        }
         listenSSE(jobId);
       }
     })

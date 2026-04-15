@@ -440,8 +440,8 @@ def generate_minutes_claude_api(transcript: str, names: str, context: str,
 def generate_minutes_ollama(transcript: str, names: str, context: str,
                             model: str, emit_callback=None,
                             ollama_url: str = None, prev_minutes: str = "",
-                            roster: str = "") -> str:
-    """Generate minutes using a local Ollama model."""
+                            roster: str = "", cancel_event=None) -> str:
+    """Generate minutes using a local Ollama model (streaming for tok/s stats and cancellation)."""
     url = ollama_url or OLLAMA_URL
     if emit_callback:
         try:
@@ -454,17 +454,51 @@ def generate_minutes_ollama(transcript: str, names: str, context: str,
         f"{url}/api/chat",
         json={
             "model": model,
-            "stream": False,
+            "stream": True,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user",   "content": user_content},
             ],
         },
+        stream=True,
         timeout=3600,
     )
     if resp.status_code != 200:
-        raise RuntimeError(f"Ollama request failed ({resp.status_code}):\n{resp.text}")
-    return resp.json()["message"]["content"]
+        raise RuntimeError(f"Ollama request failed ({resp.status_code}):\n{resp.text[:500]}")
+
+    chunks: list[str] = []
+    eval_count = 0
+    eval_duration_ns = 0
+
+    for line in resp.iter_lines():
+        if cancel_event and cancel_event.is_set():
+            resp.close()
+            return ""  # caller will check cancel_event and discard result
+        if not line:
+            continue
+        try:
+            chunk = json.loads(line)
+        except Exception:
+            continue
+        content = chunk.get("message", {}).get("content", "")
+        if content:
+            chunks.append(content)
+        if chunk.get("done"):
+            eval_count        = chunk.get("eval_count", 0)
+            eval_duration_ns  = chunk.get("eval_duration", 0)
+            break
+
+    if eval_count and eval_duration_ns:
+        tps = eval_count / (eval_duration_ns / 1e9)
+        msg = f"Ollama: {eval_count:,} tokens at {tps:.1f} tok/s"
+        print(f"  {msg}")
+        if emit_callback:
+            try:
+                emit_callback("log", message=msg, level="info")
+            except Exception:
+                pass
+
+    return "".join(chunks)
 
 
 def generate_minutes_claude_cli(transcript: str, names: str,
@@ -493,7 +527,8 @@ def generate_minutes(transcript: str, names: str = "", context: str = "",
                      emit_callback=None,
                      ollama_url: str = None,
                      prev_minutes: str = "",
-                     roster: str = "") -> str:
+                     roster: str = "",
+                     cancel_event=None) -> str:
     if backend == "claude-api":
         return generate_minutes_claude_api(transcript, names, context,
                                            emit_callback=emit_callback,
@@ -505,7 +540,8 @@ def generate_minutes(transcript: str, names: str = "", context: str = "",
                                        emit_callback=emit_callback,
                                        ollama_url=ollama_url,
                                        prev_minutes=prev_minutes,
-                                       roster=roster)
+                                       roster=roster,
+                                       cancel_event=cancel_event)
     elif backend == "claude-cli":
         return generate_minutes_claude_cli(transcript, names, context,
                                            prev_minutes=prev_minutes,
