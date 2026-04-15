@@ -771,7 +771,9 @@ const _savedServer  = localStorage.getItem("ms_server");
 const _savedBackend = localStorage.getItem("ms_backend");
 if (_savedBackend) {
   const bSel = document.getElementById("backend-input");
-  if ([...bSel.options].some(o => o.value === _savedBackend)) bSel.value = _savedBackend;
+  if ([...bSel.options].some(o => o.value === _savedBackend)) {
+    bSel.value = _savedBackend;
+  }
 }
 
 document.getElementById("server-input").addEventListener("change", () => {

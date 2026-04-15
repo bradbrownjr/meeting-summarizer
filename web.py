@@ -55,7 +55,11 @@ TEMPLATES_DIR = Path(os.environ.get(
     Path.home() / "meeting-templates",
 ))
 
-DEFAULT_BACKEND      = os.environ.get("DEFAULT_BACKEND",      "claude-api")
+_env_backend = os.environ.get("DEFAULT_BACKEND", "")
+if not _env_backend:
+    # Auto-detect: prefer ollama if no Claude API key is configured
+    _env_backend = "claude-api" if os.environ.get("ANTHROPIC_API_KEY") else "ollama"
+DEFAULT_BACKEND      = _env_backend
 DEFAULT_OLLAMA_MODEL = os.environ.get("DEFAULT_OLLAMA_MODEL", "gemma4:e4b")
 
 SERVERS_FILE = DATA_DIR / "servers.json"
