@@ -12,7 +12,6 @@ import re
 import requests
 import shutil
 import socket
-import tempfile
 import threading
 import time
 import urllib.parse
@@ -24,13 +23,14 @@ import yaml
 from flask import Flask, Response, jsonify, render_template, request
 
 
-# ── Previous-minutes text extraction ─────────────────────────────────────────
+# ── Uploaded-document text extraction ───────────────────────────────────────
 
-def _extract_prev_minutes(f) -> str:
-    """Extract plain text from an uploaded .txt, .md, .pdf, or .docx file."""
-    suffix = Path(f.filename).suffix.lower()
-    raw = f.read()
+def _extract_uploaded_text(filename: str, raw: bytes) -> str:
+    """Extract plain text from an uploaded .txt, .md, .csv, .pdf, or .docx file."""
+    suffix = Path(filename).suffix.lower()
     if suffix in (".txt", ".md"):
+        return raw.decode("utf-8", errors="replace").strip()
+    if suffix == ".csv":
         return raw.decode("utf-8", errors="replace").strip()
     if suffix == ".pdf":
         import io
@@ -225,8 +225,127 @@ def _set_security_headers(resp):
     )
     return resp
 
-UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", tempfile.gettempdir())) / "meeting_uploads"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+JOBS_DIR = Path(os.environ.get("UPLOAD_DIR", DATA_DIR / "jobs"))
+JOBS_DIR.mkdir(parents=True, exist_ok=True)
+JOB_RETENTION_DAYS = max(1, int(os.environ.get("JOB_RETENTION_DAYS", "30")))
+
+
+def _job_dir(job_id: str) -> Path:
+    return JOBS_DIR / job_id
+
+
+def _job_metadata_path(job_id: str) -> Path:
+    return _job_dir(job_id) / "metadata.json"
+
+
+def _job_transcript_path(job_id: str) -> Path:
+    return _job_dir(job_id) / "transcript.txt"
+
+
+def _job_minutes_path(job_id: str) -> Path:
+    return _job_dir(job_id) / "minutes.md"
+
+
+def _job_audio_path(job_id: str, audio_name: str) -> Path:
+    return _job_dir(job_id) / audio_name
+
+
+def _job_associated_dir(job_id: str) -> Path:
+    return _job_dir(job_id) / "associated"
+
+
+def _serializable_job(job_id: str, job: dict) -> dict:
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "logs": list(job["logs"]),
+        "meeting_name": job.get("meeting_name", ""),
+        "error": job.get("error"),
+        "created_at": job["created_at"],
+        "audio_name": job.get("audio_name", ""),
+        "minutes_file": job.get("minutes_file"),
+        "transcript_file": job.get("transcript_file"),
+        "associated_files": job.get("associated_files", []),
+    }
+
+
+def _persist_job(job_id: str):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if not job:
+            return
+        payload = _serializable_job(job_id, job)
+    job_dir = _job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    _job_metadata_path(job_id).write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _read_job_artifact(job_id: str, artifact_name: str | None) -> str | None:
+    if not artifact_name:
+        return None
+    path = _job_dir(job_id) / artifact_name
+    if not path.exists():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def _new_runtime_job(created_at: float | None = None) -> dict:
+    return {
+        "status": "queued",
+        "logs": [],
+        "result_md": None,
+        "transcript": None,
+        "meeting_name": "",
+        "error": None,
+        "subscribers": [],
+        "created_at": created_at or time.time(),
+        "cancel_event": threading.Event(),
+        "audio_name": "",
+        "minutes_file": None,
+        "transcript_file": None,
+        "associated_files": [],
+    }
+
+
+def _load_persisted_jobs():
+    for meta_path in sorted(JOBS_DIR.glob("*/metadata.json")):
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        job_id = data.get("job_id") or meta_path.parent.name
+        job = _new_runtime_job(created_at=data.get("created_at"))
+        job.update({
+            "status": data.get("status", "error"),
+            "logs": data.get("logs", []),
+            "meeting_name": data.get("meeting_name", ""),
+            "error": data.get("error"),
+            "audio_name": data.get("audio_name", ""),
+            "minutes_file": data.get("minutes_file"),
+            "transcript_file": data.get("transcript_file"),
+            "associated_files": data.get("associated_files", []),
+        })
+        if job["minutes_file"]:
+            job["result_md"] = _read_job_artifact(job_id, job["minutes_file"])
+        if job["transcript_file"]:
+            job["transcript"] = _read_job_artifact(job_id, job["transcript_file"])
+        if job["status"] in ("queued", "transcribing", "generating"):
+            message = "Job interrupted by server restart or container update."
+            job["status"] = "error"
+            job["error"] = message
+            job["logs"].append(message)
+        with _jobs_lock:
+            _jobs[job_id] = job
+        _persist_job(job_id)
+
+
+def _delete_job(job_id: str):
+    shutil.rmtree(_job_dir(job_id), ignore_errors=True)
+    with _jobs_lock:
+        _jobs.pop(job_id, None)
 
 
 # ── Job state ─────────────────────────────────────────────────────────────────
@@ -241,17 +360,9 @@ _run_queue: _queue.Queue = _queue.Queue()  # sequential job execution
 def _new_job() -> str:
     job_id = uuid.uuid4().hex
     with _jobs_lock:
-        _jobs[job_id] = {
-            "status": "queued",
-            "logs": [],
-            "result_md": None,
-            "transcript": None,
-            "meeting_name": "",
-            "error": None,
-            "subscribers": [],  # one Queue per active SSE connection
-            "created_at": time.time(),
-            "cancel_event": threading.Event(),  # set to cancel this job
-        }
+        _jobs[job_id] = _new_runtime_job()
+    _job_dir(job_id).mkdir(parents=True, exist_ok=True)
+    _persist_job(job_id)
     return job_id
 
 
@@ -268,10 +379,19 @@ def _push(job_id: str, event: dict):
     elif etype == "result":
         job["result_md"] = event["data"].get("minutes", "")
         job["transcript"] = event["data"].get("transcript", "")
+        if job["result_md"]:
+            minutes_path = _job_minutes_path(job_id)
+            minutes_path.write_text(job["result_md"], encoding="utf-8")
+            job["minutes_file"] = minutes_path.name
+        if job["transcript"]:
+            transcript_path = _job_transcript_path(job_id)
+            transcript_path.write_text(job["transcript"], encoding="utf-8")
+            job["transcript_file"] = transcript_path.name
         job["status"] = "done"
     elif etype == "error":
         job["error"] = event["data"].get("message", "Unknown error")
         job["status"] = "error"
+    _persist_job(job_id)
     with _jobs_lock:
         subscribers = list(job["subscribers"])
     for q in subscribers:
@@ -289,7 +409,7 @@ def _emit(job_id: str, event_type: str, **data):
 
 def _run_job(job_id: str, audio_path: Path, org_id: str,
              date_str: str, names: str, backend: str,
-             server_id: str = "default", prev_minutes: str = ""):
+             server_id: str = "default", associated_context: str = ""):
     cancel_event = _jobs[job_id]["cancel_event"]
     from summarize_meeting import (
         transcribe, build_clean_transcript, generate_minutes,
@@ -376,8 +496,8 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
         _emit(job_id, "status", status="generating")
         log(f"Generating minutes (backend: {backend})\u2026")
 
-        if prev_minutes:
-            log(f"Previous minutes provided ({len(prev_minutes.split()):,} words) — including as context.")
+        if associated_context:
+            log(f"Associated reference material provided ({len(associated_context.split()):,} words) — including as context.")
         if org_roster:
             log(f"Roster: {len([l for l in org_roster.splitlines() if l.strip()])} members loaded.")
 
@@ -394,7 +514,7 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
             ollama_model=_ollama_model or OLLAMA_MODEL,
             emit_callback=emit_cb,
             ollama_url=_ollama_url,
-            prev_minutes=prev_minutes,
+            associated_context=associated_context,
             roster=org_roster,
             cancel_event=cancel_event,
         )
@@ -773,34 +893,53 @@ def api_run():
     if server_id not in servers:
         return jsonify({"ok": False, "error": "Unknown server_id"}), 400
 
-    # Optional previous minutes: paste text or uploaded file (.txt, .md, .pdf, .docx)
-    _PREV_MINUTES_MAX_BYTES = 2 * 1024 * 1024  # 2 MB
-    prev_minutes = ""
-    prev_file = request.files.get("prev_minutes_file")
-    if prev_file and prev_file.filename:
-        raw = prev_file.read(_PREV_MINUTES_MAX_BYTES + 1)
-        if len(raw) > _PREV_MINUTES_MAX_BYTES:
-            return jsonify({"ok": False, "error": "Previous minutes file exceeds 2 MB limit"}), 400
-        prev_file.stream.seek(0)
-        try:
-            prev_minutes = _extract_prev_minutes(prev_file)
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"Could not read previous minutes: {exc}"}), 400
-    if not prev_minutes:
-        prev_text = request.form.get("prev_minutes_text", "").strip()
-        if len(prev_text) > 2 * 1024 * 1024:
-            return jsonify({"ok": False, "error": "Previous minutes text exceeds 2 MB limit"}), 400
-        prev_minutes = prev_text
-
     job_id = _new_job()
-    dest = UPLOAD_DIR / job_id / audio_name
+    dest = _job_audio_path(job_id, audio_name)
     dest.parent.mkdir(parents=True, exist_ok=True)
     audio.save(dest)
+
+    _ASSOCIATED_MAX_BYTES = 2 * 1024 * 1024  # 2 MB per file
+    associated_files = []
+    associated_text_parts = []
+    for assoc in request.files.getlist("associated_files"):
+        if not assoc or not assoc.filename:
+            continue
+        assoc_name = Path(assoc.filename).name
+        assoc_ext = Path(assoc_name).suffix.lower()
+        if assoc_ext not in {".txt", ".md", ".pdf", ".docx", ".csv"}:
+            return jsonify({"ok": False, "error": f"Unsupported associated file type: {assoc_name}"}), 400
+        raw = assoc.read(_ASSOCIATED_MAX_BYTES + 1)
+        if len(raw) > _ASSOCIATED_MAX_BYTES:
+            return jsonify({"ok": False, "error": f"Associated file exceeds 2 MB limit: {assoc_name}"}), 400
+        try:
+            text = _extract_uploaded_text(assoc_name, raw)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"Could not read associated file '{assoc_name}': {exc}"}), 400
+        assoc_dir = _job_associated_dir(job_id)
+        assoc_dir.mkdir(parents=True, exist_ok=True)
+        stored_name = assoc_name
+        target = assoc_dir / stored_name
+        counter = 2
+        while target.exists():
+            stored_name = f"{Path(assoc_name).stem}_{counter}{Path(assoc_name).suffix}"
+            target = assoc_dir / stored_name
+            counter += 1
+        target.write_bytes(raw)
+        associated_files.append({"name": assoc_name, "stored_name": stored_name})
+        if text:
+            associated_text_parts.append(f"Associated file: {assoc_name}\n{text}")
+
+    associated_context = "\n\n".join(associated_text_parts)
+
+    with _jobs_lock:
+        _jobs[job_id]["audio_name"] = audio_name
+        _jobs[job_id]["associated_files"] = associated_files
+    _persist_job(job_id)
 
     with _jobs_lock:
         _jobs[job_id]["_pending_args"] = {
             "args": (dest, org_id, date_str, names, backend, server_id),
-            "kwargs": {"prev_minutes": prev_minutes},
+            "kwargs": {"associated_context": associated_context},
         }
     _run_queue.put(job_id)
 
@@ -876,6 +1015,7 @@ def api_jobs_list():
                 "meeting_name": j["meeting_name"],
                 "created_at":   j["created_at"],
                 "error":        j["error"],
+                "associated_files": len(j.get("associated_files", [])),
             }
             for jid, j in _jobs.items()
         ]
@@ -904,8 +1044,21 @@ def api_cancel_job(job_id: str):
     with _jobs_lock:
         job["status"]  = "cancelled"
         job["error"]   = "Cancelled by user"
+    _persist_job(job_id)
     _emit(job_id, "status", status="cancelled")
     _emit(job_id, "eof")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/jobs/<job_id>", methods=["DELETE"])
+def api_delete_job(job_id: str):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Not found"}), 404
+    if job["status"] in ("queued", "transcribing", "generating"):
+        return jsonify({"error": "Cannot delete an active job"}), 400
+    _delete_job(job_id)
     return jsonify({"ok": True})
 
 
@@ -998,11 +1151,12 @@ def api_job(job_id: str):
         "status":       job["status"],
         "meeting_name": job["meeting_name"],
         "logs":         list(job["logs"]),
-        "result_md":    job["result_md"],
-        "transcript":   job["transcript"],
+        "result_md":    job["result_md"] if job["result_md"] is not None else _read_job_artifact(job_id, job.get("minutes_file")),
+        "transcript":   job["transcript"] if job["transcript"] is not None else _read_job_artifact(job_id, job.get("transcript_file")),
         "error":        job["error"],
         "queue_pos":    queue_pos,
         "queue_total":  queue_total,
+        "associated_files": job.get("associated_files", []),
     })
 
 
@@ -1015,6 +1169,9 @@ def api_download(job_id: str):
         return jsonify({"error": "Not found"}), 404
 
     content = job["result_md"] if filetype == "minutes" else job["transcript"]
+    if content is None:
+        artifact_name = job.get("minutes_file") if filetype == "minutes" else job.get("transcript_file")
+        content = _read_job_artifact(job_id, artifact_name)
     if not content:
         return jsonify({"error": "Not available yet"}), 404
 
@@ -1036,15 +1193,17 @@ def api_download(job_id: str):
 def _cleanup_loop():
     while True:
         time.sleep(3600)
-        cutoff = time.time() - 86400
+        cutoff = time.time() - (JOB_RETENTION_DAYS * 86400)
         with _jobs_lock:
-            stale = [jid for jid, j in _jobs.items() if j["created_at"] < cutoff]
+            stale = [
+                jid for jid, j in _jobs.items()
+                if j["created_at"] < cutoff and j["status"] in ("done", "error", "cancelled")
+            ]
         for jid in stale:
-            shutil.rmtree(UPLOAD_DIR / jid, ignore_errors=True)
-            with _jobs_lock:
-                _jobs.pop(jid, None)
+            _delete_job(jid)
 
 
+_load_persisted_jobs()
 threading.Thread(target=_cleanup_loop, daemon=True).start()
 
 

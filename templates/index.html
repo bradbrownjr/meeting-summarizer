@@ -418,34 +418,6 @@
       flex-wrap: wrap;
     }
 
-    /* Previous minutes */
-    #prev-minutes-file-btn {
-      font-size: .8rem;
-      padding: .3rem .75rem;
-      margin-top: .4rem;
-    }
-    #prev-minutes-file-name {
-      font-size: .8rem;
-      color: var(--primary);
-      margin-top: .25rem;
-      font-weight: 600;
-      min-height: 1em;
-    }
-    /* textarea-only collapse */
-    #prev-minutes-toggle {
-      background: none;
-      border: none;
-      padding: 0;
-      font-size: .82rem;
-      color: var(--muted);
-      cursor: pointer;
-      text-decoration: underline;
-      margin-top: .4rem;
-      display: inline-block;
-    }
-    #prev-minutes-toggle:hover { color: var(--primary); }
-    #prev-minutes-textarea-wrap { margin-top: .35rem; }
-
     /* Service status indicators */
     .svc-row {
       display: flex;
@@ -582,19 +554,20 @@
       <input type="text" id="names-input" placeholder="e.g. Amy, Brad, John Smith" />
     </div>
 
-    <!-- Previous Minutes -->
+    <!-- Associated Files -->
     <div class="field" style="margin-top:.25rem">
-      <label>Previous minutes <span style="font-weight:400;text-transform:none;font-style:italic">(optional)</span></label>
+      <label>Associated files <span style="font-weight:400;text-transform:none;font-style:italic">(optional)</span></label>
       <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:.25rem">
-        <button class="btn btn-outline" type="button" id="prev-minutes-file-btn" style="font-size:.82rem;padding:.35rem .85rem">&#128194; Load file (.txt .md .pdf .docx)</button>
-        <span id="prev-minutes-file-name"></span>
+        <button class="btn btn-outline" type="button" id="associated-files-btn" style="font-size:.82rem;padding:.35rem .85rem">&#128194; Add files (.txt .md .csv .pdf .docx)</button>
       </div>
-      <button type="button" id="prev-minutes-toggle">&#9656; Expand to paste text</button>
-      <div id="prev-minutes-textarea-wrap" style="display:none">
-        <textarea id="prev-minutes-textarea" rows="5"
-          placeholder="Paste previous meeting minutes here&#x2026;"></textarea>
+      <div id="associated-files-list" style="display:flex;flex-direction:column;gap:.4rem"></div>
+      <p style="font-size:.78rem;color:var(--muted);margin-top:.3rem">
+        Upload prior minutes, handwritten notes, updated rosters, or other reference material to guide transcription and summary generation.
+      </p>
+      <div id="associated-files-empty" style="font-size:.8rem;color:var(--muted)">
+        No associated files selected.
       </div>
-      <input type="file" id="prev-minutes-file-input" accept=".txt,.md,.pdf,.docx" style="display:none" />
+      <input type="file" id="associated-files-input" accept=".txt,.md,.csv,.pdf,.docx" multiple style="display:none" />
     </div>
 
     <!-- Audio file -->
@@ -754,7 +727,7 @@ let orgs            = {};
 let servers         = {{ initial_servers | tojson }};
 let selectedOrg     = null;
 let selectedFile    = null;
-let selectedPrevFile = null;
+let selectedAssociatedFiles = [];
 let currentJobId    = null;
 let editingOrgId    = null;
 let editingServerId = null;
@@ -1198,42 +1171,42 @@ function closeEditor() {
   editingOrgId = null;
 }
 
-// ── Previous minutes file loader ───────────────────────────────────────────
-const prevToggle   = document.getElementById("prev-minutes-toggle");
-const prevWrap     = document.getElementById("prev-minutes-textarea-wrap");
-let prevAreaOpen   = false;
-prevToggle.addEventListener("click", () => {
-  prevAreaOpen = !prevAreaOpen;
-  prevWrap.style.display  = prevAreaOpen ? "block" : "none";
-  prevToggle.textContent  = prevAreaOpen ? "\u25be Collapse text" : "\u25b6 Expand to paste text";
-});
+// ── Associated files loader ────────────────────────────────────────────────
+function renderAssociatedFiles() {
+  const list = document.getElementById("associated-files-list");
+  const empty = document.getElementById("associated-files-empty");
+  list.innerHTML = "";
+  empty.style.display = selectedAssociatedFiles.length ? "none" : "block";
+  selectedAssociatedFiles.forEach((file, index) => {
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.alignItems = "center";
+    row.style.gap = ".5rem";
+    row.style.flexWrap = "wrap";
+    row.innerHTML = `
+      <span style="font-size:.82rem;color:var(--primary);font-weight:600">&#10003; ${escHtml(file.name)} (${(file.size / 1024).toFixed(0)} KB)</span>
+      <button class="btn" type="button" style="background:var(--danger);color:#fff;font-size:.72rem;padding:.18rem .55rem" data-remove-associated="${index}" aria-label="Remove ${escHtml(file.name)}">&#10005;</button>
+    `;
+    row.querySelector("[data-remove-associated]").addEventListener("click", () => {
+      selectedAssociatedFiles.splice(index, 1);
+      renderAssociatedFiles();
+    });
+    list.appendChild(row);
+  });
+}
 
-document.getElementById("prev-minutes-file-btn").addEventListener("click", () => {
-  document.getElementById("prev-minutes-file-input").click();
+document.getElementById("associated-files-btn").addEventListener("click", () => {
+  document.getElementById("associated-files-input").click();
 });
-document.getElementById("prev-minutes-file-input").addEventListener("change", e => {
-  const f = e.target.files[0];
-  if (!f) return;
-  const ext = f.name.split(".").pop().toLowerCase();
-  if (ext === "txt" || ext === "md") {
-    const reader = new FileReader();
-    reader.onload = ev => {
-      // Open the textarea and populate it so user can review
-      prevAreaOpen = true;
-      prevWrap.style.display = "block";
-      prevToggle.textContent = "\u25be Collapse text";
-      document.getElementById("prev-minutes-textarea").value = ev.target.result;
-      document.getElementById("prev-minutes-file-name").textContent = "\u2714 " + f.name;
-      selectedPrevFile = null;
-    };
-    reader.readAsText(f);
-  } else {
-    selectedPrevFile = f;
-    document.getElementById("prev-minutes-textarea").value = "";
-    document.getElementById("prev-minutes-file-name").textContent = "\u2714 " + f.name + " (parsed on submit)";
-  }
+document.getElementById("associated-files-input").addEventListener("change", e => {
+  const files = Array.from(e.target.files || []);
+  if (!files.length) return;
+  selectedAssociatedFiles.push(...files);
+  renderAssociatedFiles();
   e.target.value = "";
 });
+
+renderAssociatedFiles();
 
 // ── Roster file loader (org editor) ────────────────────────────────────────
 document.getElementById("roster-file-btn").addEventListener("click", () => {
@@ -1299,12 +1272,7 @@ submitBtn.addEventListener("click", async () => {
   fd.append("names",     document.getElementById("names-input").value.trim());
   fd.append("backend",   document.getElementById("backend-input").value);
   fd.append("server_id", document.getElementById("server-input").value);
-  if (selectedPrevFile) {
-    fd.append("prev_minutes_file", selectedPrevFile);
-  } else {
-    const prevText = document.getElementById("prev-minutes-textarea").value.trim();
-    if (prevText) fd.append("prev_minutes_text", prevText);
-  }
+  selectedAssociatedFiles.forEach(file => fd.append("associated_files", file));
 
   document.getElementById("form-section").style.display     = "none";
   document.getElementById("progress-section").style.display = "block";
@@ -1431,14 +1399,10 @@ function activateTab(name) {
 document.getElementById("reset-btn").addEventListener("click", () => {
   selectedFile = null;
   currentJobId = null;
-  selectedPrevFile = null;
+  selectedAssociatedFiles = [];
   fileLabel.textContent = "";
   logBox.innerHTML   = "";
-  document.getElementById("prev-minutes-textarea").value         = "";
-  document.getElementById("prev-minutes-file-name").textContent  = "";
-  prevAreaOpen = false;
-  prevWrap.style.display = "none";
-  prevToggle.textContent = "\u25b6 Expand to paste text";
+  renderAssociatedFiles();
   document.getElementById("form-section").style.display     = "block";
   document.getElementById("progress-section").style.display = "none";
   document.getElementById("result-section").style.display   = "none";
@@ -1513,8 +1477,8 @@ async function refreshActiveJobs() {
   const card = document.getElementById("active-jobs-card");
   const list = document.getElementById("active-jobs-list");
 
-  // Only show jobs from the last 24 h
-  const cutoff = Date.now() / 1000 - 86400;
+  // Show persisted jobs from the last 30 days.
+  const cutoff = Date.now() / 1000 - (30 * 86400);
   jobs = jobs.filter(j => j.created_at > cutoff);
 
   if (jobs.length === 0) {
@@ -1546,6 +1510,7 @@ async function refreshActiveJobs() {
       <span class="job-row-name">${escHtml(name)}<small>${escHtml(ago)}</small></span>
       <span class="job-status-badge ${badgeClass}">${badgeLabel}</span>
       ${isActive ? `<button class="btn" style="background:var(--danger);color:#fff;font-size:.79rem;padding:.25rem .6rem;flex-shrink:0" onclick="cancelJob('${escHtml(j.job_id)}')">&#10005;</button>` : ""}
+      ${!isActive ? `<button class="btn" style="background:var(--danger);color:#fff;font-size:.79rem;padding:.25rem .6rem;flex-shrink:0" onclick="deleteJob('${escHtml(j.job_id)}')">Delete</button>` : ""}
       <a class="btn btn-outline" href="?job=${encodeURIComponent(j.job_id)}"
          style="padding:.35rem .8rem;font-size:.82rem;flex-shrink:0">View</a>
     `;
@@ -1566,6 +1531,25 @@ function stopJobsPolling() {
 
 async function cancelJob(jobId) {
   await fetch(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+  await refreshActiveJobs();
+}
+
+async function deleteJob(jobId) {
+  if (!confirm("Delete this job and its saved files?")) return;
+  const resp = await fetch(`/api/jobs/${jobId}`, { method: "DELETE" });
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    showError(data.error || "Delete failed.");
+    return;
+  }
+  if (window.location.search === `?job=${encodeURIComponent(jobId)}`) {
+    history.replaceState({}, '', window.location.pathname);
+    document.getElementById("progress-section").style.display = "none";
+    document.getElementById("result-section").style.display = "none";
+    document.getElementById("form-section").style.display = "block";
+    document.getElementById("share-hint").style.display = "none";
+  }
+  showError("");
   await refreshActiveJobs();
 }
 
