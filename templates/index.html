@@ -433,6 +433,40 @@
       font-weight: 600;
       min-height: 1em;
     }
+    /* textarea-only collapse */
+    #prev-minutes-toggle {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: .82rem;
+      color: var(--muted);
+      cursor: pointer;
+      text-decoration: underline;
+      margin-top: .4rem;
+      display: inline-block;
+    }
+    #prev-minutes-toggle:hover { color: var(--primary); }
+    #prev-minutes-textarea-wrap { margin-top: .35rem; }
+
+    /* Service status indicators */
+    .svc-row {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      font-size: .82rem;
+      color: var(--muted);
+      margin-top: .3rem;
+    }
+    .svc-dot {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--border);
+      transition: background .3s;
+    }
+    .svc-dot.ok      { background: #2ecc71; }
+    .svc-dot.err     { background: var(--danger); }
+    .svc-dot.checking { background: #f39c12; }
 
     @media (max-width: 480px) {
       .card { padding: 1.1rem; }
@@ -550,35 +584,20 @@
       <input type="text" id="names-input" placeholder="e.g. Amy, Brad, John Smith" />
     </div>
 
-    <!-- Previous Minutes (collapsible) -->
-    <details id="prev-minutes-details">
-      <summary style="cursor:pointer;font-size:.85rem;color:var(--muted);margin-top:.25rem;margin-bottom:.5rem">
-        &#128196; Previous minutes <span style="font-style:italic;font-weight:400">(optional &mdash; improves old/new business continuity)</span>
-      </summary>
-      <div class="field" style="margin-top:.5rem">
-        <label>Last month's minutes <span class="hint">Paste below or load a file. Gives the AI context for topics, names, and call signs carried over from the prior meeting.</span></label>
+    <!-- Previous Minutes -->
+    <div class="field" style="margin-top:.25rem">
+      <label>Previous minutes <span style="font-weight:400;text-transform:none;font-style:italic">(optional)</span></label>
+      <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:.25rem">
+        <button class="btn btn-outline" type="button" id="prev-minutes-file-btn" style="font-size:.82rem;padding:.35rem .85rem">&#128194; Load file (.txt .md .pdf .docx)</button>
+        <span id="prev-minutes-file-name"></span>
+      </div>
+      <button type="button" id="prev-minutes-toggle">&#9656; Expand to paste text</button>
+      <div id="prev-minutes-textarea-wrap" style="display:none">
         <textarea id="prev-minutes-textarea" rows="5"
           placeholder="Paste previous meeting minutes here&#x2026;"></textarea>
-        <div style="margin-top:.4rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
-          <button class="btn btn-outline" type="button" id="prev-minutes-file-btn" style="font-size:.85rem;padding:.4rem .9rem">&#128194; Load file (.txt .md .pdf .docx)</button>
-          <span id="prev-minutes-file-name"></span>
-        </div>
-        <input type="file" id="prev-minutes-file-input" accept=".txt,.md,.pdf,.docx" style="display:none" />
       </div>
-    </details>
-
-    <!-- Advanced -->
-    <details>
-      <summary>Advanced options</summary>
-      <div class="field">
-        <label>Minutes Backend</label>
-        <select id="backend-input">
-          <option value="claude-api" {% if default_backend == 'claude-api' %}selected{% endif %}>Claude API</option>
-          <option value="ollama" {% if default_backend == 'ollama' %}selected{% endif %}>Ollama (local LLM)</option>
-          <option value="transcript_only" {% if default_backend == 'transcript_only' %}selected{% endif %}>Transcript only (no summary)</option>
-        </select>
-      </div>
-    </details>
+      <input type="file" id="prev-minutes-file-input" accept=".txt,.md,.pdf,.docx" style="display:none" />
+    </div>
   </div>
 
   <div class="card">
@@ -597,10 +616,29 @@
   <!-- Server card -->
   <div class="card">
     <h2>&#9881; Server</h2>
+
+    <div class="field">
+      <label>Minutes Backend</label>
+      <select id="backend-input">
+        <option value="claude-api" {% if default_backend == 'claude-api' %}selected{% endif %}>Claude API</option>
+        <option value="ollama" {% if default_backend == 'ollama' %}selected{% endif %}>Ollama (local LLM)</option>
+        <option value="transcript_only" {% if default_backend == 'transcript_only' %}selected{% endif %}>Transcript only (no summary)</option>
+      </select>
+    </div>
+
     <div class="field">
       <label>Transcription &amp; LLM Server</label>
       <select id="server-input"></select>
       <button id="manage-servers-toggle" type="button" class="manage-link">Manage servers</button>
+    </div>
+    <!-- Service status indicators -->
+    <div class="svc-row">
+      <span class="svc-dot" id="svc-whisper-dot"></span>
+      <span id="svc-whisper-label">Whisper &mdash; checking&hellip;</span>
+    </div>
+    <div class="svc-row" id="svc-ollama-row">
+      <span class="svc-dot" id="svc-ollama-dot"></span>
+      <span id="svc-ollama-label">Ollama &mdash; checking&hellip;</span>
     </div>
 
     <div id="manage-servers-panel" style="display:none;margin-top:.75rem">
@@ -771,6 +809,65 @@ function renderServerDropdown() {
     if (id === cur) opt.selected = true;
     sel.appendChild(opt);
   });
+  checkServerHealth();
+}
+
+document.getElementById("server-input").addEventListener("change", checkServerHealth);
+
+async function checkServerHealth() {
+  const sid = document.getElementById("server-input").value;
+  const s   = servers[sid];
+  if (!s) return;
+
+  const backend = document.getElementById("backend-input").value;
+
+  // Whisper
+  const wDot   = document.getElementById("svc-whisper-dot");
+  const wLabel = document.getElementById("svc-whisper-label");
+  wDot.className = "svc-dot checking";
+  wLabel.textContent = "Whisper \u2014 checking\u2026";
+  try {
+    const url = (s.whisper_url || "").replace(/\/$/, "");
+    const r = await fetch("/api/health/whisper?url=" + encodeURIComponent(url), { signal: AbortSignal.timeout(5000) });
+    const d = await r.json();
+    if (d.ok) {
+      wDot.className = "svc-dot ok";
+      wLabel.textContent = "Whisper \u2014 reachable";
+    } else {
+      wDot.className = "svc-dot err";
+      wLabel.textContent = "Whisper \u2014 " + (d.error || "unreachable");
+    }
+  } catch (e) {
+    wDot.className = "svc-dot err";
+    wLabel.textContent = "Whisper \u2014 unreachable";
+  }
+
+  // Ollama (only relevant for ollama backend)
+  const ollamaRow = document.getElementById("svc-ollama-row");
+  if (backend === "ollama") {
+    ollamaRow.style.display = "flex";
+    const oDot   = document.getElementById("svc-ollama-dot");
+    const oLabel = document.getElementById("svc-ollama-label");
+    oDot.className = "svc-dot checking";
+    oLabel.textContent = "Ollama \u2014 checking\u2026";
+    try {
+      const url = (s.ollama_url || "").replace(/\/$/, "");
+      const r = await fetch("/api/health/ollama?url=" + encodeURIComponent(url), { signal: AbortSignal.timeout(5000) });
+      const d = await r.json();
+      if (d.ok) {
+        oDot.className = "svc-dot ok";
+        oLabel.textContent = "Ollama \u2014 reachable" + (s.ollama_model ? " (" + s.ollama_model + ")" : "");
+      } else {
+        oDot.className = "svc-dot err";
+        oLabel.textContent = "Ollama \u2014 " + (d.error || "unreachable");
+      }
+    } catch (e) {
+      oDot.className = "svc-dot err";
+      oLabel.textContent = "Ollama \u2014 unreachable";
+    }
+  } else {
+    ollamaRow.style.display = "none";
+  }
 }
 
 function renderServerList() {
@@ -1028,6 +1125,15 @@ function closeEditor() {
 }
 
 // ── Previous minutes file loader ───────────────────────────────────────────
+const prevToggle   = document.getElementById("prev-minutes-toggle");
+const prevWrap     = document.getElementById("prev-minutes-textarea-wrap");
+let prevAreaOpen   = false;
+prevToggle.addEventListener("click", () => {
+  prevAreaOpen = !prevAreaOpen;
+  prevWrap.style.display  = prevAreaOpen ? "block" : "none";
+  prevToggle.textContent  = prevAreaOpen ? "\u25be Collapse text" : "\u25b6 Expand to paste text";
+});
+
 document.getElementById("prev-minutes-file-btn").addEventListener("click", () => {
   document.getElementById("prev-minutes-file-input").click();
 });
@@ -1036,19 +1142,21 @@ document.getElementById("prev-minutes-file-input").addEventListener("change", e 
   if (!f) return;
   const ext = f.name.split(".").pop().toLowerCase();
   if (ext === "txt" || ext === "md") {
-    // Text files: load into textarea so user can see and edit
     const reader = new FileReader();
     reader.onload = ev => {
+      // Open the textarea and populate it so user can review
+      prevAreaOpen = true;
+      prevWrap.style.display = "block";
+      prevToggle.textContent = "\u25be Collapse text";
       document.getElementById("prev-minutes-textarea").value = ev.target.result;
       document.getElementById("prev-minutes-file-name").textContent = "\u2714 " + f.name;
       selectedPrevFile = null;
     };
     reader.readAsText(f);
   } else {
-    // PDF/DOCX: store file for server-side extraction, can't show in textarea
     selectedPrevFile = f;
     document.getElementById("prev-minutes-textarea").value = "";
-    document.getElementById("prev-minutes-file-name").textContent = "\u2714 " + f.name + " (will be parsed on submit)";
+    document.getElementById("prev-minutes-file-name").textContent = "\u2714 " + f.name + " (parsed on submit)";
   }
   e.target.value = "";
 });
@@ -1070,7 +1178,7 @@ document.getElementById("roster-file-input").addEventListener("change", e => {
 });
 
 // ── Backend toggle ─────────────────────────────────────────────────────────
-// (no per-page fields to show/hide; Ollama model is now per-server)
+document.getElementById("backend-input").addEventListener("change", checkServerHealth);
 
 // ── Drop zone ──────────────────────────────────────────────────────────────
 const dropZone  = document.getElementById("drop-zone");
@@ -1215,12 +1323,16 @@ function activateTab(name) {
 document.getElementById("reset-btn").addEventListener("click", () => {
   selectedFile = null;
   currentJobId = null;
+  selectedPrevFile = null;
   fileLabel.textContent = "";
   dropZone.classList.remove("has-file");
   submitBtn.disabled = true;
   logBox.innerHTML   = "";
-  document.getElementById("prev-minutes-textarea").value  = "";
-  document.getElementById("prev-minutes-file-name").textContent = "";
+  document.getElementById("prev-minutes-textarea").value         = "";
+  document.getElementById("prev-minutes-file-name").textContent  = "";
+  prevAreaOpen = false;
+  prevWrap.style.display = "none";
+  prevToggle.textContent = "\u25b6 Expand to paste text";
   document.getElementById("form-section").style.display     = "block";
   document.getElementById("progress-section").style.display = "none";
   document.getElementById("result-section").style.display   = "none";

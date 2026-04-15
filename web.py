@@ -608,6 +608,38 @@ def api_run():
     return jsonify({"ok": True, "job_id": job_id})
 
 
+# ── Service health checks ─────────────────────────────────────────────────────
+
+@app.route("/api/health/whisper")
+def api_health_whisper():
+    """Proxy health-check for a Whisper API server."""
+    url = request.args.get("url", "").strip()
+    if not url:
+        return jsonify({"ok": False, "error": "no url"}), 400
+    try:
+        r = requests.get(f"{url}/v1/models", timeout=5)
+        if r.status_code < 500:
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": f"HTTP {r.status_code}"}), 200
+    except requests.RequestException as e:
+        return jsonify({"ok": False, "error": str(e)}), 200
+
+
+@app.route("/api/health/ollama")
+def api_health_ollama():
+    """Proxy health-check for an Ollama server."""
+    url = request.args.get("url", "").strip()
+    if not url:
+        return jsonify({"ok": False, "error": "no url"}), 400
+    try:
+        r = requests.get(f"{url}/api/tags", timeout=5)
+        if r.status_code < 500:
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": f"HTTP {r.status_code}"}), 200
+    except requests.RequestException as e:
+        return jsonify({"ok": False, "error": str(e)}), 200
+
+
 @app.route("/api/jobs", methods=["GET"])
 def api_jobs_list():
     """Return a summary list of all known jobs, newest first."""
