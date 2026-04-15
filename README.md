@@ -59,7 +59,7 @@ The following environment variables can be set in your shell profile (e.g. `~/.b
 | `OLLAMA_URL` | `http://localhost:11434` | URL of your Ollama server |
 | `WHISPER_MODEL` | `Systran/faster-distil-whisper-large-v3` | Whisper model to use |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model for API backend |
-| `OLLAMA_MODEL` | `gemma4:e4b` | Default Ollama model |
+| `OLLAMA_MODEL` | `qwen3.5:9b` | Default Ollama model |
 | `JOB_RETENTION_DAYS` | `30` | Keep completed/failed/cancelled jobs for this many days |
 | `DATA_DIR` | `./data` | Base directory for org/server config and persisted job metadata |
 | `UPLOAD_DIR` | `<DATA_DIR>/jobs` | Directory where per-job audio, transcript, minutes, and associated files are stored |
@@ -213,7 +213,7 @@ python summarize_meeting.py recording.m4a \
 python summarize_meeting.py recording.m4a --backend claude-api
 
 # Local Ollama model
-python summarize_meeting.py recording.m4a --backend ollama --ollama-model gemma4:e4b
+python summarize_meeting.py recording.m4a --backend ollama --ollama-model qwen3.5:9b
 
 # Claude Code CLI (uses your Claude Pro subscription, no API key needed)
 python summarize_meeting.py recording.m4a --backend claude-cli
@@ -257,7 +257,7 @@ optional arguments:
   --vocabulary VOCABULARY     Comma-separated terms to improve Whisper
                               transcription accuracy
   --backend                   LLM backend: claude-api | ollama | claude-cli
-  --ollama-model OLLAMA_MODEL Ollama model name (default: gemma4:e4b)
+  --ollama-model OLLAMA_MODEL Ollama model name (default: qwen3.5:9b)
   --whisper-url URL           Whisper API server URL
   --whisper-model MODEL       Whisper model ID
   --transcript-only           Transcribe only; skip minutes generation
