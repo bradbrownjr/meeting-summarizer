@@ -734,6 +734,9 @@
       <div id="progress-detail" class="progress-detail"></div>
     </div>
     <div id="log-box"></div>
+    <div id="log-dl-row" style="display:none;margin-top:.5rem">
+      <a id="dl-log-progress" class="dl-btn secondary" style="font-size:.8rem;padding:.3rem .7rem" href="#" download>&#8595; Download Log (.log)</a>
+    </div>
     <p id="share-hint" style="margin-top:.85rem;font-size:.82rem;color:var(--muted);display:none">
       Share progress with others:
       <a id="share-url" href="" style="color:var(--primary);word-break:break-all;font-family:'SF Mono',Consolas,monospace"></a>
@@ -759,6 +762,7 @@
       <div class="result-text" id="transcript-text"></div>
       <div class="dl-row">
         <a id="dl-transcript" class="dl-btn secondary" href="#" download>&#8595; Download Transcript (.txt)</a>
+        <a id="dl-log" class="dl-btn secondary" href="#" download>&#8595; Download Log (.log)</a>
       </div>
     </div>
     <button id="reset-btn">Start a new meeting</button>
@@ -1381,6 +1385,9 @@ submitBtn.addEventListener("click", async () => {
   shareLink.href = shareHref;
   shareLink.textContent = shareHref;
   shareHint.style.display = 'block';
+  // Show log download link as soon as the job exists
+  document.getElementById("dl-log-progress").href = `/api/jobs/${currentJobId}/download?type=log`;
+  document.getElementById("log-dl-row").style.display = "block";
   stopJobsPolling();
   listenSSE(currentJobId);
 });
@@ -1470,6 +1477,7 @@ function showResults(jobId, minutes, transcript, meetingName) {
   if (!minutes && transcript) activateTab("transcript");
   document.getElementById("dl-minutes").href    = `/api/jobs/${jobId}/download?type=minutes`;
   document.getElementById("dl-transcript").href = `/api/jobs/${jobId}/download?type=transcript`;
+  document.getElementById("dl-log").href        = `/api/jobs/${jobId}/download?type=log`;
 }
 
 // ── Tabs ───────────────────────────────────────────────────────────────────
@@ -1676,6 +1684,8 @@ if (!new URLSearchParams(window.location.search).get("job")) {
   shareLink.href        = shareHref;
   shareLink.textContent = shareHref;
   document.getElementById("share-hint").style.display = "block";
+  document.getElementById("dl-log-progress").href = `/api/jobs/${jobId}/download?type=log`;
+  document.getElementById("log-dl-row").style.display = "block";
   setStatus("Loading\u2026");
 
   // Check current job state first; only open SSE if still running

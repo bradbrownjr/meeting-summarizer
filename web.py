@@ -247,6 +247,10 @@ def _job_minutes_path(job_id: str) -> Path:
     return _job_dir(job_id) / "minutes.md"
 
 
+def _job_log_path(job_id: str) -> Path:
+    return _job_dir(job_id) / "job.log"
+
+
 def _job_audio_path(job_id: str, audio_name: str) -> Path:
     return _job_dir(job_id) / audio_name
 
@@ -326,10 +330,15 @@ def _persist_job(job_id: str):
         if not job:
             return
         payload = _serializable_job(job_id, job)
+        logs = list(job["logs"])
     job_dir = _job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
     _job_metadata_path(job_id).write_text(
         json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    _job_log_path(job_id).write_text(
+        "\n".join(logs),
         encoding="utf-8",
     )
 
@@ -1304,6 +1313,24 @@ def api_download(job_id: str):
     if not job:
         return jsonify({"error": "Not found"}), 404
 
+    stem = re.sub(r"[^\w\s-]", "", job.get("meeting_name", "meeting")).strip()
+    stem = stem.replace(" ", "_") or "meeting"
+
+    if filetype == "log":
+        logs = list(job.get("logs", []))
+        # Also try reading from disk in case logs were trimmed from memory
+        log_path = _job_log_path(job_id)
+        if log_path.exists():
+            content = log_path.read_text(encoding="utf-8")
+        else:
+            content = "\n".join(logs)
+        if not content:
+            return jsonify({"error": "No log available"}), 404
+        fname = f"{stem}_job.log"
+        response = Response(content.encode("utf-8"), mimetype="text/plain")
+        response.headers["Content-Disposition"] = f'attachment; filename="{fname}"'
+        return response
+
     content = job["result_md"] if filetype == "minutes" else job["transcript"]
     if content is None:
         artifact_name = job.get("minutes_file") if filetype == "minutes" else job.get("transcript_file")
@@ -1311,8 +1338,6 @@ def api_download(job_id: str):
     if not content:
         return jsonify({"error": "Not available yet"}), 404
 
-    stem = re.sub(r"[^\w\s-]", "", job.get("meeting_name", "meeting")).strip()
-    stem = stem.replace(" ", "_") or "meeting"
     ext  = "md" if filetype == "minutes" else "txt"
     fname = f"{stem}_{'minutes' if filetype == 'minutes' else 'transcript'}.{ext}"
 
