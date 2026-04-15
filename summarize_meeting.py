@@ -204,6 +204,47 @@ def unload_ollama_model(model: str, ollama_url: str = None) -> None:
         print(f"  Warning: could not unload Ollama model: {e}")
 
 
+def _transcribe_openai_compatible(audio_path: Path, url: str, model: str,
+                                  prompt: str, hotwords: str) -> requests.Response:
+    data = {
+        "model":           model,
+        "response_format": "verbose_json",
+        "vad_filter":      "true",
+    }
+    if prompt:
+        data["prompt"] = prompt
+    if hotwords:
+        data["hotwords"] = hotwords
+
+    with open(audio_path, "rb") as fh:
+        return requests.post(
+            f"{url}/v1/audio/transcriptions",
+            files={"file": (audio_path.name, fh, mime_for(audio_path))},
+            data=data,
+            timeout=3600,
+        )
+
+
+def _transcribe_asr_webservice(audio_path: Path, url: str,
+                               prompt: str, hotwords: str) -> requests.Response:
+    initial_prompt = " ".join(part.strip() for part in (prompt, hotwords) if part.strip())
+    params = {
+        "output": "json",
+        "task": "transcribe",
+        "encode": "true",
+    }
+    if initial_prompt:
+        params["initial_prompt"] = initial_prompt
+
+    with open(audio_path, "rb") as fh:
+        return requests.post(
+            f"{url}/asr",
+            params=params,
+            files={"audio_file": (audio_path.name, fh, mime_for(audio_path))},
+            timeout=3600,
+        )
+
+
 def transcribe(audio_path: Path, cleanup: list,
                prompt: str = "", hotwords: str = "",
                emit_callback=None,
@@ -224,23 +265,11 @@ def transcribe(audio_path: Path, cleanup: list,
     size_kb = audio_path.stat().st_size // 1024
     _log(f"Sending {audio_path.name} ({size_kb:,} KB) to Whisper API ({model})...")
 
-    data = {
-        "model":           model,
-        "response_format": "verbose_json",
-        "vad_filter":      "true",
-    }
-    if prompt:
-        data["prompt"] = prompt
-    if hotwords:
-        data["hotwords"] = hotwords
+    resp = _transcribe_openai_compatible(audio_path, url, model, prompt, hotwords)
 
-    with open(audio_path, "rb") as fh:
-        resp = requests.post(
-            f"{url}/v1/audio/transcriptions",
-            files={"file": (audio_path.name, fh, mime_for(audio_path))},
-            data=data,
-            timeout=3600,
-        )
+    if resp.status_code == 404:
+        _log("OpenAI-style Whisper endpoint not found; retrying with /asr compatibility mode ...")
+        resp = _transcribe_asr_webservice(audio_path, url, prompt, hotwords)
 
     if resp.status_code == 404 and "not installed" in resp.text.lower():
         ensure_model_downloaded(model, whisper_url=url)
@@ -255,7 +284,7 @@ def transcribe(audio_path: Path, cleanup: list,
 
     if resp.status_code != 200:
         raise RuntimeError(
-            f"Transcription failed ({resp.status_code}) at {url}/v1/audio/transcriptions:\n{resp.text}"
+            f"Transcription failed ({resp.status_code}) at {resp.request.url}:\n{resp.text}"
         )
 
     return resp.json()
