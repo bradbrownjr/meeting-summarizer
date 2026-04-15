@@ -12,6 +12,9 @@ Automatically transcribes meeting audio recordings and generates formatted meeti
 - **Three LLM backends for summarization** (see below)
 - Unloads Whisper and local LLM models from memory when done
 - **Web UI** — upload audio and receive minutes in a browser (no command line needed)
+- Jobs and downloads persist across container/image restarts (when data volume is mounted)
+- Delete finished jobs and their saved files from the web UI
+- Upload multiple associated reference files (previous minutes, notes, roster exports)
 
 ---
 
@@ -57,6 +60,9 @@ The following environment variables can be set in your shell profile (e.g. `~/.b
 | `WHISPER_MODEL` | `Systran/faster-distil-whisper-large-v3` | Whisper model to use |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model for API backend |
 | `OLLAMA_MODEL` | `gemma4:e4b` | Default Ollama model |
+| `JOB_RETENTION_DAYS` | `30` | Keep completed/failed/cancelled jobs for this many days |
+| `DATA_DIR` | `./data` | Base directory for org/server config and persisted job metadata |
+| `UPLOAD_DIR` | `<DATA_DIR>/jobs` | Directory where per-job audio, transcript, minutes, and associated files are stored |
 
 ---
 
@@ -102,10 +108,20 @@ python web.py
 
 Features:
 - Select a pre-configured committee or add your own
-- Drag-and-drop audio upload
+- Audio upload with optional associated reference files (multi-file)
 - Live transcription/generation log
 - Download minutes (`.md`) and transcript (`.txt`)
 - Import committee templates from YAML files
+- Active/recent jobs survive restarts and can be deleted (with associated files)
+
+Associated files can include previous-month minutes, meeting notes, roster exports, and similar reference material (`.txt`, `.md`, `.csv`, `.pdf`, `.docx`).
+
+### Job Persistence & Cleanup
+
+- Job metadata and outputs are saved on disk and reloaded on startup.
+- Completed/failed/cancelled jobs are retained for `JOB_RETENTION_DAYS` (default 30).
+- Queued/running jobs interrupted by a restart are marked as interrupted.
+- Non-active jobs can be deleted from the UI, which removes job metadata and associated files.
 
 ### Running with Docker
 
@@ -140,6 +156,8 @@ export ENFORCE_ORIGIN_CHECK=1
 
 3. Prefer HTTPS behind a reverse proxy if accessed outside a trusted LAN.
 4. Restrict network exposure with firewall rules and trusted interfaces only.
+
+To preserve jobs and downloads across upgrades/restarts, keep `/data` mounted to persistent storage.
 
 See [SECURITY.md](SECURITY.md) for full security details.
 

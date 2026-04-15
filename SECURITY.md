@@ -33,7 +33,8 @@ This project is designed for self-hosted use on trusted networks, but includes b
   - Date format validation (`YYYY-MM-DD`)
   - Known organization and server ID checks
   - Length limits for free-text fields
-- Previous-minutes payloads are capped at 2 MB (both uploaded file and pasted text).
+- Associated reference file uploads are restricted to an allowlist (`.txt`, `.md`, `.csv`, `.pdf`, `.docx`).
+- Associated reference files are capped at 2 MB per file.
 
 ### Browser hardening headers
 
@@ -48,8 +49,10 @@ Responses include security headers such as:
 
 ### Output/download safety and stability
 
-- Download responses are generated in memory rather than temporary files.
-- This avoids temporary-file race patterns and temp-file accumulation.
+- Job metadata and generated artifacts are persisted to per-job directories under the configured job storage path.
+- Download responses are served from persisted artifacts (or in-memory values if still active).
+- Finished jobs can be explicitly deleted from the UI/API; deletion removes job metadata and associated files.
+- Automatic retention cleanup removes old finished jobs after the configured retention window.
 
 ## Recommended Production Configuration
 
