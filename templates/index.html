@@ -599,19 +599,17 @@
       </div>
       <input type="file" id="prev-minutes-file-input" accept=".txt,.md,.pdf,.docx" style="display:none" />
     </div>
-  </div>
 
-  <div class="card">
-    <h2>&#127897; Audio File</h2>
-    <div id="drop-zone" role="button" tabindex="0"
-         aria-label="Click or drag an audio file here">
-      <div class="drop-icon">&#127897;</div>
-      <p>Drag &amp; drop your audio file here, or <strong>click to browse</strong></p>
-      <p style="font-size:.8rem;margin-top:.4rem">MP3, M4A, WAV, OGG, FLAC &mdash; up to 500 MB</p>
-      <div id="file-name"></div>
+    <!-- Audio file -->
+    <div class="field" style="margin-top:.25rem">
+      <label>Audio Recording</label>
+      <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+        <button class="btn btn-outline" type="button" id="audio-file-btn" style="font-size:.82rem;padding:.35rem .85rem">&#127897; Choose audio file&hellip;</button>
+        <span id="file-name" style="font-size:.82rem;color:var(--primary);font-weight:600"></span>
+      </div>
+      <p style="font-size:.78rem;color:var(--muted);margin-top:.3rem">MP3, M4A, WAV, OGG, FLAC &mdash; up to 500 MB</p>
+      <input type="file" id="file-input" accept=".mp3,.m4a,.wav,.ogg,.flac,.aac,.wma,.opus" style="display:none" />
     </div>
-    <input type="file" id="file-input"
-           accept=".mp3,.m4a,.wav,.ogg,.flac,.aac,.wma,.opus" />
   </div>
 
   <!-- Server card -->
@@ -759,6 +757,21 @@ async function loadOrgs() {
   renderOrgList();
 }
 
+// ── Persist server + backend selection ───────────────────────────────────
+const _savedServer  = localStorage.getItem("ms_server");
+const _savedBackend = localStorage.getItem("ms_backend");
+if (_savedBackend) {
+  const bSel = document.getElementById("backend-input");
+  if ([...bSel.options].some(o => o.value === _savedBackend)) bSel.value = _savedBackend;
+}
+
+document.getElementById("server-input").addEventListener("change", () => {
+  localStorage.setItem("ms_server", document.getElementById("server-input").value);
+});
+document.getElementById("backend-input").addEventListener("change", () => {
+  localStorage.setItem("ms_backend", document.getElementById("backend-input").value);
+});
+
 loadOrgs();
 renderServerDropdown();
 renderServerList();
@@ -801,7 +814,7 @@ function renderOrgPills() {
 // ── Servers ────────────────────────────────────────────────────────────────
 function renderServerDropdown() {
   const sel = document.getElementById("server-input");
-  const cur = sel.value;
+  const cur = sel.value || _savedServer || "";
   sel.innerHTML = "";
   Object.entries(servers).forEach(([id, s]) => {
     const opt = document.createElement("option");
@@ -810,6 +823,7 @@ function renderServerDropdown() {
     if (id === cur) opt.selected = true;
     sel.appendChild(opt);
   });
+  if (sel.value) localStorage.setItem("ms_server", sel.value);
   checkServerHealth();
 }
 
@@ -1181,8 +1195,7 @@ document.getElementById("roster-file-input").addEventListener("change", e => {
 // ── Backend toggle ─────────────────────────────────────────────────────────
 document.getElementById("backend-input").addEventListener("change", checkServerHealth);
 
-// ── Drop zone ──────────────────────────────────────────────────────────────
-const dropZone  = document.getElementById("drop-zone");
+// ── Audio file picker ──────────────────────────────────────────────────────
 const fileInput = document.getElementById("file-input");
 const fileLabel = document.getElementById("file-name");
 const submitBtn = document.getElementById("submit-btn");
@@ -1190,21 +1203,11 @@ const submitBtn = document.getElementById("submit-btn");
 function setFile(file) {
   selectedFile = file;
   fileLabel.textContent = `\u2714 ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`;
-  dropZone.classList.add("has-file");
   submitBtn.disabled = false;
 }
 
-dropZone.addEventListener("click",    () => fileInput.click());
-dropZone.addEventListener("keydown",  e => { if (e.key === "Enter" || e.key === " ") fileInput.click(); });
-fileInput.addEventListener("change",  e => { if (e.target.files[0]) setFile(e.target.files[0]); });
-dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.classList.add("over"); });
-dropZone.addEventListener("dragleave", () => dropZone.classList.remove("over"));
-dropZone.addEventListener("drop", e => {
-  e.preventDefault();
-  dropZone.classList.remove("over");
-  const f = e.dataTransfer.files[0];
-  if (f) setFile(f);
-});
+document.getElementById("audio-file-btn").addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", e => { if (e.target.files[0]) setFile(e.target.files[0]); });
 
 // ── Submit ─────────────────────────────────────────────────────────────────
 submitBtn.addEventListener("click", async () => {
@@ -1326,8 +1329,6 @@ document.getElementById("reset-btn").addEventListener("click", () => {
   currentJobId = null;
   selectedPrevFile = null;
   fileLabel.textContent = "";
-  dropZone.classList.remove("has-file");
-  submitBtn.disabled = true;
   logBox.innerHTML   = "";
   document.getElementById("prev-minutes-textarea").value         = "";
   document.getElementById("prev-minutes-file-name").textContent  = "";
