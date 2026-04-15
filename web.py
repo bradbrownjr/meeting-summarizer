@@ -76,7 +76,7 @@ def _default_servers() -> dict:
         "default": {
             "label":         "Home Server",
             "whisper_url":   os.environ.get("WHISPER_URL",   "http://localhost:8000"),
-            "whisper_model": os.environ.get("WHISPER_MODEL", "Systran/faster-distil-whisper-large-v3"),
+            "whisper_model": os.environ.get("WHISPER_MODEL", "Systran/faster-whisper-large-v3"),
             "ollama_url":    os.environ.get("OLLAMA_URL",    "http://localhost:11434"),
         }
     }

@@ -57,7 +57,7 @@ CONFIG_PATH = Path(__file__).parent / "config.json"
 
 WHISPER_URL  = os.getenv("WHISPER_URL", "http://localhost:8000")
 OLLAMA_URL    = os.getenv("OLLAMA_URL",   "http://localhost:11434")
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "Systran/faster-distil-whisper-large-v3")
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "Systran/faster-whisper-large-v3")
 CLAUDE_MODEL  = os.getenv("CLAUDE_MODEL",  "claude-sonnet-4-6")
 OLLAMA_MODEL  = os.getenv("OLLAMA_MODEL",  "qwen3.5:9b")
 
