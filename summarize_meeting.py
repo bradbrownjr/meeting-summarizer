@@ -249,7 +249,9 @@ def transcribe(audio_path: Path, cleanup: list,
                           whisper_url=url, whisper_model=model)
 
     if resp.status_code != 200:
-        raise RuntimeError(f"Transcription failed ({resp.status_code}):\n{resp.text}")
+        raise RuntimeError(
+            f"Transcription failed ({resp.status_code}) at {url}/v1/audio/transcriptions:\n{resp.text}"
+        )
 
     return resp.json()
 

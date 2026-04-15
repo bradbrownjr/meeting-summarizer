@@ -1341,7 +1341,7 @@ function listenSSE(jobId) {
       showResults(jobId, evt.data.minutes, evt.data.transcript, evt.data.meeting_name);
     } else if (evt.type === "error") {
       es.close(); _activeES = null;
-      showFormError(evt.data.message || "An error occurred.");
+      showJobFailure(jobId, evt.data.message || "An error occurred.");
     } else if (evt.type === "eof") {
       es.close(); _activeES = null;
     }
@@ -1352,7 +1352,7 @@ function listenSSE(jobId) {
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(j => {
         if (j.status === "done")        showResults(jobId, j.result_md, j.transcript, j.meeting_name);
-        else if (j.status === "error")     showFormError(j.error || "Unknown error");
+        else if (j.status === "error")     showJobFailure(jobId, j.error || "Unknown error");
         else if (j.status === "cancelled") {
           showFormError("Job was cancelled.");
         }
@@ -1444,6 +1444,29 @@ function showFormError(msg) {
   refreshActiveJobs();
   showError(msg);
 }
+
+function showJobFailure(jobId, msg, appendToLog = true) {
+  document.getElementById("form-section").style.display     = "none";
+  document.getElementById("result-section").style.display   = "none";
+  document.getElementById("progress-section").style.display = "block";
+  if (jobId) {
+    currentJobId = jobId;
+    const shareHref = window.location.origin + window.location.pathname + '?job=' + jobId;
+    const shareLink = document.getElementById("share-url");
+    shareLink.href = shareHref;
+    shareLink.textContent = shareHref;
+    document.getElementById("share-hint").style.display = "block";
+    if (window.location.search !== `?job=${encodeURIComponent(jobId)}`) {
+      history.replaceState({jobId}, '', `?job=${encodeURIComponent(jobId)}`);
+    }
+  }
+  setStatus("Failed");
+  if (appendToLog && msg) appendLog(msg, "error");
+  showError(msg || "Job failed.");
+  stopJobsPolling();
+  refreshActiveJobs();
+}
+
 function escHtml(s) {
   return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
            .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
@@ -1552,7 +1575,10 @@ if (!new URLSearchParams(window.location.search).get("job")) {
     .then(j => {
       if (j.status === "done") {
         showResults(jobId, j.result_md, j.transcript, j.meeting_name);
-      } else if (j.status === "error" || j.status === "cancelled") {
+      } else if (j.status === "error") {
+        (j.logs || []).forEach(m => appendLog(m, "info"));
+        showJobFailure(jobId, j.error || "Job failed.", false);
+      } else if (j.status === "cancelled") {
         showFormError(j.error || "Job failed.");
       } else {
         // In-progress or queued: replay logs then stream live
