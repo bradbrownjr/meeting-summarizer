@@ -264,12 +264,19 @@ def transcribe(audio_path: Path, cleanup: list,
 
     size_kb = audio_path.stat().st_size // 1024
     _log(f"Sending {audio_path.name} ({size_kb:,} KB) to Whisper API ({model})...")
+    _log("Checking transcription endpoint: OpenAI-compatible /v1/audio/transcriptions ...")
 
     resp = _transcribe_openai_compatible(audio_path, url, model, prompt, hotwords)
 
+    if resp.status_code == 200:
+        _log("OpenAI-compatible transcription endpoint: connected.")
+
     if resp.status_code == 404:
-        _log("OpenAI-style Whisper endpoint not found; retrying with /asr compatibility mode ...")
+        _log("OpenAI-compatible transcription endpoint: not found.")
+        _log("Checking transcription endpoint: Whisper ASR Box /asr compatibility mode ...")
         resp = _transcribe_asr_webservice(audio_path, url, prompt, hotwords)
+        if resp.status_code == 200:
+            _log("Whisper ASR Box transcription endpoint: connected.")
 
     if resp.status_code == 404 and "not installed" in resp.text.lower():
         ensure_model_downloaded(model, whisper_url=url)
