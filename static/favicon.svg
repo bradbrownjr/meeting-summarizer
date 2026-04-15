@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Background tile -->
+  <rect width="32" height="32" rx="6" fill="#1e1e2e"/>
+  <!-- Speech bubble -->
+  <path d="M4 5 Q4 3 6 3 L26 3 Q28 3 28 5 L28 19 Q28 21 26 21 L14 21 L9 27 L10 21 L6 21 Q4 21 4 19 Z" fill="#e05a4e"/>
+  <!-- Text lines in bubble -->
+  <rect x="8"  y="8"  width="16" height="2.2" rx="1.1" fill="white" opacity="0.92"/>
+  <rect x="8"  y="12" width="16" height="2.2" rx="1.1" fill="white" opacity="0.92"/>
+  <rect x="8"  y="16" width="10" height="2.2" rx="1.1" fill="white" opacity="0.92"/>
+</svg>
