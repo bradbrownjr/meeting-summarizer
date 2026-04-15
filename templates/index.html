@@ -1338,14 +1338,21 @@ function listenSSE(jobId) {
   es.onerror = () => {
     es.close(); _activeES = null;
     fetch(`/api/jobs/${jobId}`)
-      .then(r => r.json())
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(j => {
-        if (j.status === "done")      showResults(jobId, j.result_md, j.transcript, j.meeting_name);
+        if (j.status === "done")        showResults(jobId, j.result_md, j.transcript, j.meeting_name);
         else if (j.status === "error")     showFormError(j.error || "Unknown error");
         else if (j.status === "cancelled") {
           document.getElementById("progress-section").style.display = "none";
           document.getElementById("form-section").style.display     = "block";
           showError("Job was cancelled.");
+        }
+      })
+      .catch(status => {
+        if (status === 404) {
+          document.getElementById("progress-section").style.display = "none";
+          document.getElementById("form-section").style.display     = "block";
+          showError("Job not found \u2014 the server may have restarted.");
         }
       });
   };
@@ -1531,7 +1538,7 @@ if (!new URLSearchParams(window.location.search).get("job")) {
     .then(j => {
       if (j.status === "done") {
         showResults(jobId, j.result_md, j.transcript, j.meeting_name);
-      } else if (j.status === "error") {
+      } else if (j.status === "error" || j.status === "cancelled") {
         showFormError(j.error || "Job failed.");
       } else {
         // In-progress or queued: replay logs then stream live
@@ -1545,10 +1552,16 @@ if (!new URLSearchParams(window.location.search).get("job")) {
         listenSSE(jobId);
       }
     })
-    .catch(() => {
-      // Job not found or server error — try SSE anyway as fallback
-      setStatus("Connecting\u2026");
-      listenSSE(jobId);
+    .catch(status => {
+      if (status === 404) {
+        // Job not in memory (server restarted) — show a clean message
+        document.getElementById("progress-section").style.display = "none";
+        document.getElementById("form-section").style.display     = "block";
+        showError("Job not found \u2014 the server may have restarted. Please submit a new job.");
+      } else {
+        setStatus("Connecting\u2026");
+        listenSSE(jobId);
+      }
     });
 })();
 </script>
