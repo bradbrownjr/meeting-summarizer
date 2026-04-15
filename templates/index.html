@@ -755,6 +755,7 @@ let selectedPrevFile = null;
 let currentJobId    = null;
 let editingOrgId    = null;
 let editingServerId = null;
+let _activeES       = null;  // current EventSource
 
 // ── Init ───────────────────────────────────────────────────────────────────
 document.getElementById("date-input").value = new Date().toISOString().slice(0, 10);

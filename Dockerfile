@@ -21,7 +21,14 @@ ENV UPLOAD_DIR=/tmp/meeting_uploads
 ENV DATA_DIR=/data
 ENV TEMPLATES_DIR=/templates
 ENV WEB_PORT=8082
+ENV WEB_WORKERS=4
 
 EXPOSE 8082
 
-CMD ["python", "web.py"]
+CMD gunicorn \
+    --worker-class gevent \
+    --workers ${WEB_WORKERS} \
+    --bind 0.0.0.0:${WEB_PORT} \
+    --timeout 3600 \
+    --keep-alive 65 \
+    web:app
