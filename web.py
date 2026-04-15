@@ -4,20 +4,24 @@ Run:
     python web.py [--port 8082] [--host 0.0.0.0]
 """
 
+import ipaddress
+import hmac
 import json
 import os
 import re
 import requests
 import shutil
+import socket
 import tempfile
 import threading
 import time
+import urllib.parse
 import uuid
 from datetime import datetime
 from pathlib import Path
 
 import yaml
-from flask import Flask, Response, jsonify, render_template, request, send_file
+from flask import Flask, Response, jsonify, render_template, request
 
 
 # ── Previous-minutes text extraction ─────────────────────────────────────────
@@ -121,12 +125,105 @@ def _make_org_id(label: str, existing: dict) -> str:
     return slug
 
 
+# ── SSRF guard ───────────────────────────────────────────────────────────────
+# The health-check endpoints proxy requests on behalf of the browser (needed
+# because direct browser → local-service calls are blocked by CORS/mixed-content).
+# Private/LAN IPs are intentionally allowed — they are the target services.
+# We only block link-local (cloud metadata) ranges and non-HTTP(S) schemes.
+
+_BLOCKED_NETS = [
+    ipaddress.ip_network("169.254.0.0/16"),   # AWS/GCP/Azure IMDS (link-local)
+    ipaddress.ip_network("fe80::/10"),         # IPv6 link-local
+]
+_MAX_URL_LEN = 512
+API_AUTH_TOKEN = os.environ.get("MEETING_SUMMARIZER_API_TOKEN", "").strip()
+ENFORCE_ORIGIN_CHECK = os.environ.get("ENFORCE_ORIGIN_CHECK", "1").strip().lower() not in (
+    "0", "false", "no"
+)
+_ALLOWED_AUDIO_EXTS = {
+    ".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac", ".wma", ".opus", ".webm"
+}
+
+
+def _is_safe_service_url(url: str) -> tuple[bool, str]:
+    """Return (True, "") if url is a well-formed http(s) URL whose hostname
+    does not resolve to a cloud-metadata (link-local) address."""
+    if not url:
+        return False, "empty URL"
+    if len(url) > _MAX_URL_LEN:
+        return False, "URL too long"
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return False, "could not parse URL"
+    if parsed.scheme not in ("http", "https"):
+        return False, f"scheme '{parsed.scheme}' not allowed"
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "no hostname"
+    try:
+        addr = ipaddress.ip_address(socket.gethostbyname(hostname))
+    except Exception:
+        return False, f"could not resolve '{hostname}'"
+    for net in _BLOCKED_NETS:
+        if addr in net:
+            return False, f"address {addr} is blocked"
+    return True, ""
+
+
+def _is_same_origin_request() -> bool:
+    """Accept requests with matching Origin/Referer. If neither header is
+    present (non-browser clients), allow the request."""
+    expected = request.host_url.rstrip("/")
+    origin = request.headers.get("Origin", "").rstrip("/")
+    if origin:
+        return origin == expected
+    referer = request.headers.get("Referer", "")
+    if referer:
+        parsed = urllib.parse.urlparse(referer)
+        ref_origin = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+        return ref_origin == expected
+    return True
+
+
 # ── Flask app ─────────────────────────────────────────────────────────────────
 
 _template_dir = os.path.join(os.path.dirname(__file__), "templates")
 _static_dir = os.path.join(os.path.dirname(__file__), "static")
 app = Flask(__name__, template_folder=_template_dir, static_folder=_static_dir)
 app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024  # 500 MB
+
+
+@app.before_request
+def _api_security_guard():
+    """Basic API hardening for browser-facing endpoints."""
+    if not request.path.startswith("/api/"):
+        return None
+    if request.method not in ("POST", "PUT", "DELETE"):
+        return None
+    if ENFORCE_ORIGIN_CHECK and not _is_same_origin_request():
+        return jsonify({"error": "Origin check failed"}), 403
+    if API_AUTH_TOKEN:
+        provided = request.headers.get("X-API-Token", "")
+        if not provided or not hmac.compare_digest(provided, API_AUTH_TOKEN):
+            return jsonify({"error": "Invalid API token"}), 401
+    return None
+
+
+@app.after_request
+def _set_security_headers(resp):
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "same-origin")
+    resp.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+    resp.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    resp.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; "
+        "base-uri 'self'; form-action 'self'",
+    )
+    return resp
 
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", tempfile.gettempdir())) / "meeting_uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -191,7 +288,7 @@ def _emit(job_id: str, event_type: str, **data):
 # ── Job runner ────────────────────────────────────────────────────────────────
 
 def _run_job(job_id: str, audio_path: Path, org_id: str,
-             date_str: str, names: str, backend: str, ollama_model: str,
+             date_str: str, names: str, backend: str,
              server_id: str = "default", prev_minutes: str = ""):
     cancel_event = _jobs[job_id]["cancel_event"]
     from summarize_meeting import (
@@ -228,10 +325,16 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
             month_year = date_str
             formatted_date = date_str
 
-        context = org.get("context_template", "").format(date=formatted_date)
-        meeting_name = org.get("name_template", "Meeting \u2013 {month_year}").format(
-            month_year=month_year
-        )
+        try:
+            context = org.get("context_template", "").format(date=formatted_date)
+        except KeyError:
+            context = org.get("context_template", "")
+        try:
+            meeting_name = org.get("name_template", "Meeting \u2013 {month_year}").format(
+                month_year=month_year
+            )
+        except KeyError:
+            meeting_name = org.get("name_template", "Meeting \u2013 {month_year}")
         with _jobs_lock:
             _jobs[job_id]["meeting_name"] = meeting_name
 
@@ -248,7 +351,7 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
 
         log(f"Starting: {meeting_name}")
         log(f"Audio: {audio_path.name}  ({audio_path.stat().st_size // 1024:,} KB)")
-        log(f"Whisper model: {WHISPER_MODEL}")
+        log(f"Whisper model: {_whisper_model or WHISPER_MODEL}")
         if combined_vocab:
             log(f"Vocabulary hints: {combined_vocab[:120]}{'...' if len(combined_vocab) > 120 else ''}")
 
@@ -313,12 +416,12 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
 
     finally:
         try:
-            unload_whisper_model(WHISPER_MODEL, whisper_url=_whisper_url)
+            unload_whisper_model(_whisper_model or WHISPER_MODEL, whisper_url=_whisper_url)
         except Exception:
             pass
         if backend == "ollama":
             try:
-                unload_ollama_model(ollama_model or OLLAMA_MODEL, ollama_url=_ollama_url)
+                unload_ollama_model(_ollama_model or OLLAMA_MODEL, ollama_url=_ollama_url)
             except Exception:
                 pass
         for p in cleanup:
@@ -434,6 +537,12 @@ def api_servers_create():
     data = request.get_json(force=True)
     if not data or not data.get("label", "").strip():
         return jsonify({"error": "label is required"}), 400
+    for key in ("whisper_url", "ollama_url"):
+        url = data.get(key, "").strip()
+        if url:
+            safe, reason = _is_safe_service_url(url)
+            if not safe:
+                return jsonify({"error": f"invalid {key}: {reason}"}), 400
     servers = load_servers()
     server_id = data.get("id") or _make_org_id(data["label"], servers)
     servers[server_id] = {
@@ -452,6 +561,12 @@ def api_servers_update(server_id: str):
     data = request.get_json(force=True)
     if not data or not data.get("label", "").strip():
         return jsonify({"error": "label is required"}), 400
+    for key in ("whisper_url", "ollama_url"):
+        url = data.get(key, "").strip()
+        if url:
+            safe, reason = _is_safe_service_url(url)
+            if not safe:
+                return jsonify({"error": f"invalid {key}: {reason}"}), 400
     servers = load_servers()
     if server_id not in servers:
         return jsonify({"error": "Not found"}), 404
@@ -618,33 +733,60 @@ def api_run():
     audio = request.files.get("audio")
     if not audio or not audio.filename:
         return jsonify({"ok": False, "error": "No audio file provided"}), 400
+    audio_name = Path(audio.filename).name
+    if Path(audio_name).suffix.lower() not in _ALLOWED_AUDIO_EXTS:
+        return jsonify({"ok": False, "error": "Unsupported audio file type"}), 400
 
-    org_id       = request.form.get("org", "")
-    date_str     = request.form.get("date", datetime.today().strftime("%Y-%m-%d"))
-    names        = request.form.get("names", "")
-    backend      = request.form.get("backend", "claude-api")
-    ollama_model = request.form.get("ollama_model", "")
-    server_id    = request.form.get("server_id", "default")
+    org_id    = request.form.get("org", "")
+    date_str  = request.form.get("date", datetime.today().strftime("%Y-%m-%d"))
+    names     = request.form.get("names", "")
+    backend   = request.form.get("backend", "claude-api")
+    server_id = request.form.get("server_id", "default")
+
+    _VALID_BACKENDS = {"claude-api", "ollama", "claude-cli", "transcript_only"}
+    if backend not in _VALID_BACKENDS:
+        return jsonify({"ok": False, "error": f"Invalid backend '{backend}'"}), 400
+    if len(names) > 2000:
+        return jsonify({"ok": False, "error": "names field is too long"}), 400
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return jsonify({"ok": False, "error": "Invalid date format; expected YYYY-MM-DD"}), 400
+
+    orgs = load_orgs()
+    if org_id and org_id not in orgs:
+        return jsonify({"ok": False, "error": "Unknown organization"}), 400
+    servers = load_servers()
+    if server_id not in servers:
+        return jsonify({"ok": False, "error": "Unknown server_id"}), 400
 
     # Optional previous minutes: paste text or uploaded file (.txt, .md, .pdf, .docx)
+    _PREV_MINUTES_MAX_BYTES = 2 * 1024 * 1024  # 2 MB
     prev_minutes = ""
     prev_file = request.files.get("prev_minutes_file")
     if prev_file and prev_file.filename:
+        raw = prev_file.read(_PREV_MINUTES_MAX_BYTES + 1)
+        if len(raw) > _PREV_MINUTES_MAX_BYTES:
+            return jsonify({"ok": False, "error": "Previous minutes file exceeds 2 MB limit"}), 400
+        prev_file.stream.seek(0)
         try:
             prev_minutes = _extract_prev_minutes(prev_file)
         except Exception as exc:
             return jsonify({"ok": False, "error": f"Could not read previous minutes: {exc}"}), 400
     if not prev_minutes:
-        prev_minutes = request.form.get("prev_minutes_text", "").strip()
+        prev_text = request.form.get("prev_minutes_text", "").strip()
+        if len(prev_text) > 2 * 1024 * 1024:
+            return jsonify({"ok": False, "error": "Previous minutes text exceeds 2 MB limit"}), 400
+        prev_minutes = prev_text
 
     job_id = _new_job()
-    dest = UPLOAD_DIR / job_id / Path(audio.filename).name
+    dest = UPLOAD_DIR / job_id / audio_name
     dest.parent.mkdir(parents=True, exist_ok=True)
     audio.save(dest)
 
     with _jobs_lock:
         _jobs[job_id]["_pending_args"] = {
-            "args": (dest, org_id, date_str, names, backend, ollama_model, server_id),
+            "args": (dest, org_id, date_str, names, backend, server_id),
             "kwargs": {"prev_minutes": prev_minutes},
         }
     _run_queue.put(job_id)
@@ -663,6 +805,9 @@ def api_server_vram(server_id: str):
     url = (server.get("ollama_url") or "").rstrip("/")
     if not url:
         return jsonify({"ok": False, "error": "No Ollama URL configured"})
+    safe, reason = _is_safe_service_url(url)
+    if not safe:
+        return jsonify({"ok": False, "error": f"invalid url: {reason}"}), 400
     try:
         r = requests.get(f"{url}/api/ps", timeout=5)
         data = r.json()
@@ -677,6 +822,9 @@ def api_health_whisper():
     url = request.args.get("url", "").strip()
     if not url:
         return jsonify({"ok": False, "error": "no url"}), 400
+    safe, reason = _is_safe_service_url(url)
+    if not safe:
+        return jsonify({"ok": False, "error": f"invalid url: {reason}"}), 400
     try:
         r = requests.get(f"{url}/v1/models", timeout=5)
         if r.status_code < 500:
@@ -692,6 +840,9 @@ def api_health_ollama():
     url = request.args.get("url", "").strip()
     if not url:
         return jsonify({"ok": False, "error": "no url"}), 400
+    safe, reason = _is_safe_service_url(url)
+    if not safe:
+        return jsonify({"ok": False, "error": f"invalid url: {reason}"}), 400
     try:
         r = requests.get(f"{url}/api/tags", timeout=5)
         if r.status_code < 500:
@@ -844,9 +995,12 @@ def api_download(job_id: str):
     ext  = "md" if filetype == "minutes" else "txt"
     fname = f"{stem}_{'minutes' if filetype == 'minutes' else 'transcript'}.{ext}"
 
-    tmp = Path(tempfile.mktemp(suffix=f"_{fname}"))
-    tmp.write_text(content, encoding="utf-8")
-    return send_file(tmp, as_attachment=True, download_name=fname)
+    mime = "text/markdown" if filetype == "minutes" else "text/plain"
+    response = Response(content.encode("utf-8"), mimetype=mime)
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="{fname}"'
+    )
+    return response
 
 
 # ── Stale job cleanup ─────────────────────────────────────────────────────────

@@ -122,6 +122,27 @@ docker run -p 8082:8082 \
   ghcr.io/bradbrownjr/meeting-summarizer:latest
 ```
 
+### Quick Hardening Checklist
+
+For shared use, set these before exposing the app to other users:
+
+1. Set a strong API token:
+
+```bash
+export MEETING_SUMMARIZER_API_TOKEN="replace-with-long-random-secret"
+```
+
+2. Keep origin checks enabled (default is enabled):
+
+```bash
+export ENFORCE_ORIGIN_CHECK=1
+```
+
+3. Prefer HTTPS behind a reverse proxy if accessed outside a trusted LAN.
+4. Restrict network exposure with firewall rules and trusted interfaces only.
+
+See [SECURITY.md](SECURITY.md) for full security details.
+
 ---
 
 ## Committee Templates (YAML)
@@ -245,3 +266,9 @@ When a bad range is found, the script extracts that portion of audio, anchors Wh
 - The model is unloaded from server memory when the script finishes.
 - Distil-Whisper large-v3 is ~6× faster than large-v3 with less than 1% accuracy difference.
 - For best results, record in a quiet environment close to the microphone.
+
+---
+
+## Security
+
+For deployment hardening guidance and a full list of implemented protections, see [SECURITY.md](SECURITY.md).

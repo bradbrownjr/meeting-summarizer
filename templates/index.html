@@ -148,20 +148,6 @@
     }
     details[open] summary { margin-bottom: 1rem; }
 
-    /* Drop zone */
-    #drop-zone {
-      border: 2.5px dashed var(--border);
-      border-radius: var(--radius);
-      padding: 2rem 1rem;
-      text-align: center;
-      cursor: pointer;
-      transition: border-color .2s, background .2s;
-      background: var(--bg);
-    }
-    #drop-zone.over   { border-color: var(--accent); background: #e9f5ee; }
-    #drop-zone.has-file { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 12%, var(--bg)); }
-    #drop-zone p { color: var(--muted); font-size: .95rem; }
-    #drop-zone .drop-icon { font-size: 2rem; margin-bottom: .5rem; }
     #file-name { margin-top: .5rem; font-size: .9rem; color: var(--primary); font-weight: 600; }
     #file-input { display: none; }
 
@@ -626,6 +612,12 @@
     </div>
 
     <div class="field">
+      <label>API Token <span style="font-weight:400;text-transform:none">(optional)</span></label>
+      <input type="password" id="api-token-input" placeholder="Only required if server enforces MEETING_SUMMARIZER_API_TOKEN" autocomplete="off" />
+      <p style="font-size:.78rem;color:var(--muted);margin-top:.3rem">Stored only in this browser (localStorage) and sent as X-API-Token.</p>
+    </div>
+
+    <div class="field">
       <label>Transcription &amp; LLM Server</label>
       <select id="server-input"></select>
       <button id="manage-servers-toggle" type="button" class="manage-link">Manage servers</button>
@@ -757,6 +749,16 @@ let editingOrgId    = null;
 let editingServerId = null;
 let _activeES       = null;  // current EventSource
 
+const _nativeFetch = window.fetch.bind(window);
+window.fetch = (input, init = {}) => {
+  const opts = { ...init };
+  const headers = new Headers(opts.headers || {});
+  const token = localStorage.getItem("ms_api_token") || "";
+  if (token) headers.set("X-API-Token", token);
+  opts.headers = headers;
+  return _nativeFetch(input, opts);
+};
+
 // ── Init ───────────────────────────────────────────────────────────────────
 document.getElementById("date-input").value = new Date().toISOString().slice(0, 10);
 
@@ -770,11 +772,15 @@ async function loadOrgs() {
 // ── Persist server + backend selection ───────────────────────────────────
 const _savedServer  = localStorage.getItem("ms_server");
 const _savedBackend = localStorage.getItem("ms_backend");
+const _savedApiToken = localStorage.getItem("ms_api_token") || "";
 if (_savedBackend) {
   const bSel = document.getElementById("backend-input");
   if ([...bSel.options].some(o => o.value === _savedBackend)) {
     bSel.value = _savedBackend;
   }
+}
+if (_savedApiToken) {
+  document.getElementById("api-token-input").value = _savedApiToken;
 }
 
 document.getElementById("server-input").addEventListener("change", () => {
@@ -782,6 +788,11 @@ document.getElementById("server-input").addEventListener("change", () => {
 });
 document.getElementById("backend-input").addEventListener("change", () => {
   localStorage.setItem("ms_backend", document.getElementById("backend-input").value);
+});
+document.getElementById("api-token-input").addEventListener("change", () => {
+  const v = document.getElementById("api-token-input").value.trim();
+  if (v) localStorage.setItem("ms_api_token", v);
+  else localStorage.removeItem("ms_api_token");
 });
 
 loadOrgs();
@@ -1432,7 +1443,8 @@ function showFormError(msg) {
   showError(msg);
 }
 function escHtml(s) {
-  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+           .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 }
 
 // ── Active jobs card ───────────────────────────────────────────────────────
