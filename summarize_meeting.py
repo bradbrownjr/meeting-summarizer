@@ -80,6 +80,26 @@ ASR_RETRY_BACKOFF_SECONDS = 8
 # Example: {"http://whisper:9000": {"mode": "asr", "include_prompt": False, "minimal": False}}
 TRANSCRIBE_MODE_HINTS = {}
 
+# ── Future: parameters to enable once fedirz/faster-whisper-server (speaches)
+# is deployed (it exposes these via the OpenAI-compatible endpoint).
+# The old ASR Box (ahmetoner/whisper-asr-webservice) ignores these.
+#
+# TODO (after Whisper server swap):
+#   1. Pass hallucination_silence_threshold=2.0 — skips silent stretches
+#      that trigger hallucination loops (requires word_timestamps=true).
+#   2. Pass word_timestamps=true — enables hallucination_silence_threshold
+#      and gives per-word timing for better segment-level quality checks.
+#   3. Pass repetition_penalty=1.2 — penalises repeated tokens at the
+#      decoding level, reducing "Rubik's Cubes × 30" style hallucinations.
+#   4. Pass no_repeat_ngram_size=3 — prevents any 3-gram from repeating,
+#      complementing the repetition_penalty.
+#   5. Pass condition_on_previous_text=false — prevents hallucination loops
+#      from propagating across 30-second windows (trades cross-window
+#      coherence for robustness; test both modes).
+#   6. Consider batched inference (batch_size=8) — the new server uses
+#      BatchedInferencePipeline which processes chunks in parallel for
+#      3-5× faster transcription on GPU.
+
 
 SYSTEM_PROMPT = """\
 You are a professional meeting secretary. You will be given a raw audio \
@@ -276,6 +296,7 @@ def _transcribe_openai_compatible(audio_path: Path, url: str, model: str,
         "model":           model,
         "response_format": "verbose_json",
         "vad_filter":      "true",
+        "language":        "en",
     }
     if prompt:
         data["prompt"] = prompt
@@ -296,7 +317,7 @@ def _transcribe_asr_webservice(audio_path: Path, url: str,
                                include_prompt: bool = True,
                                minimal: bool = False) -> requests.Response:
     initial_prompt = " ".join(part.strip() for part in (prompt, hotwords) if part.strip())
-    params = {"output": "json"}
+    params = {"output": "json", "vad_filter": "true", "language": "en"}
     if not minimal:
         params["task"] = "transcribe"
         params["encode"] = "true"
@@ -617,6 +638,8 @@ def correct_transcript(transcript: str, names: str = "", roster: str = "",
             json={
                 "model": model,
                 "stream": True,
+                "keep_alive": 0,
+                "think": False,
                 "messages": [
                     {"role": "system", "content": TRANSCRIPT_CORRECTION_PROMPT},
                     {"role": "user",   "content": user_content},
@@ -678,6 +701,8 @@ def correct_transcript(transcript: str, names: str = "", roster: str = "",
                 json={
                     "model": model,
                     "stream": True,
+                    "keep_alive": 0,
+                    "think": False,
                     "messages": [
                         {"role": "system", "content": TRANSCRIPT_CORRECTION_PROMPT},
                         {"role": "user",   "content": user_content},
@@ -840,6 +865,7 @@ def generate_minutes_ollama(transcript: str, names: str, context: str,
         json={
             "model": model,
             "stream": True,
+            "keep_alive": 0,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user",   "content": user_content},
@@ -886,6 +912,7 @@ def generate_minutes_ollama(transcript: str, names: str, context: str,
             json={
                 "model": model,
                 "stream": True,
+                "keep_alive": 0,
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user",   "content": user_content},
