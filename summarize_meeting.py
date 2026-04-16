@@ -80,25 +80,24 @@ ASR_RETRY_BACKOFF_SECONDS = 8
 # Example: {"http://whisper:9000": {"mode": "asr", "include_prompt": False, "minimal": False}}
 TRANSCRIBE_MODE_HINTS = {}
 
-# ── Future: parameters to enable once fedirz/faster-whisper-server (speaches)
-# is deployed (it exposes these via the OpenAI-compatible endpoint).
-# The old ASR Box (ahmetoner/whisper-asr-webservice) ignores these.
+# ── speaches (faster-whisper-server) feature status ─────────────────────────
+# Server: ghcr.io/speaches-ai/speaches:latest-cuda
 #
-# TODO (after Whisper server swap):
-#   1. Pass hallucination_silence_threshold=2.0 — skips silent stretches
-#      that trigger hallucination loops (requires word_timestamps=true).
-#   2. Pass word_timestamps=true — enables hallucination_silence_threshold
-#      and gives per-word timing for better segment-level quality checks.
-#   3. Pass repetition_penalty=1.2 — penalises repeated tokens at the
-#      decoding level, reducing "Rubik's Cubes × 30" style hallucinations.
-#   4. Pass no_repeat_ngram_size=3 — prevents any 3-gram from repeating,
-#      complementing the repetition_penalty.
-#   5. Pass condition_on_previous_text=false — prevents hallucination loops
-#      from propagating across 30-second windows (trades cross-window
-#      coherence for robustness; test both modes).
-#   6. Consider batched inference (batch_size=8) — the new server uses
-#      BatchedInferencePipeline which processes chunks in parallel for
-#      3-5× faster transcription on GPU.
+# ALREADY ACTIVE (handled server-side, no client params needed):
+#   - Silero VAD pre-segmentation — on by default (_unstable_vad_filter=True)
+#   - BatchedInferencePipeline — always used, 3-5× faster on GPU
+#   - STT_MODEL_TTL=0 — auto-unloads model from VRAM after each request
+#
+# NOT EXPOSED by speaches API (would need upstream support or a fork):
+#   - hallucination_silence_threshold  (faster-whisper supports it, speaches doesn't pass it)
+#   - repetition_penalty               (same)
+#   - no_repeat_ngram_size             (same)
+#   - condition_on_previous_text       (same)
+#
+# AVAILABLE but not yet used:
+#   - hotwords: already wired through _transcribe_openai_compatible()
+#   - timestamp_granularities[]=word: could enable per-word timing for
+#     quality checks; currently using segment-level verbose_json
 
 
 SYSTEM_PROMPT = """\
@@ -239,17 +238,23 @@ def ensure_model_downloaded(model: str, whisper_url: str = None,
 
 
 def unload_whisper_model(model: str, whisper_url: str = None) -> None:
-    """Unload the Whisper model from the API server memory."""
+    """Unload the Whisper model from the API server memory.
+
+    Tries the old ASR Box endpoint (DELETE /api/ps/{model}) first, then falls
+    back to speaches which auto-unloads via STT_MODEL_TTL=0.
+    """
     url = normalize_base_url(whisper_url or WHISPER_URL)
     encoded = model.replace("/", "%2F")
     try:
         resp = requests.delete(f"{url}/api/ps/{encoded}", timeout=30)
         if resp.status_code in (200, 204):
             print("  Whisper model unloaded from server memory.")
-        else:
-            print(f"  Note: Whisper unload returned {resp.status_code}.")
-    except requests.RequestException as e:
-        print(f"  Warning: could not unload Whisper model: {e}")
+            return
+    except requests.RequestException:
+        pass
+    # speaches doesn't have an explicit unload endpoint — rely on
+    # STT_MODEL_TTL=0 (env var) to auto-release VRAM after each request.
+    print("  Whisper model auto-unload delegated to server (STT_MODEL_TTL=0).")
 
 
 def unload_ollama_model(model: str, ollama_url: str = None) -> None:
@@ -295,7 +300,6 @@ def _transcribe_openai_compatible(audio_path: Path, url: str, model: str,
     data = {
         "model":           model,
         "response_format": "verbose_json",
-        "vad_filter":      "true",
         "language":        "en",
     }
     if prompt:
