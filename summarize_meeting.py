@@ -164,6 +164,26 @@ def extract_from(source: Path, start_seconds: float, dest: Path) -> Path:
     return dest
 
 
+def extract_segment(source: Path, start_seconds: float, end_seconds: float,
+                    dest: Path) -> Path:
+    """Extract a bounded audio segment [start, end] instead of to end-of-file."""
+    duration = end_seconds - start_seconds
+    if duration <= 0:
+        return extract_from(source, start_seconds, dest)
+    result = subprocess.run(
+        ["ffmpeg", "-i", str(source), "-ss", str(start_seconds),
+         "-t", str(duration), "-c", "copy", str(dest), "-y"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        subprocess.run(
+            ["ffmpeg", "-i", str(source), "-ss", str(start_seconds),
+             "-t", str(duration), str(dest), "-y"],
+            capture_output=True, check=True,
+        )
+    return dest
+
+
 def safe_filename(name: str) -> str:
     """Strip characters that are invalid in filenames."""
     return re.sub(r'[<>:"/\\|?*]', "", name).strip()
@@ -227,6 +247,27 @@ def unload_ollama_model(model: str, ollama_url: str = None) -> None:
             print(f"  Note: Ollama unload returned {resp.status_code}.")
     except requests.RequestException as e:
         print(f"  Warning: could not unload Ollama model: {e}")
+
+
+def wait_for_ollama_idle(ollama_url: str = None, timeout: int = 30) -> bool:
+    """Poll Ollama /api/ps until no models are loaded (VRAM released).
+
+    Returns True if VRAM is clear, False if we timed out.
+    """
+    import time as _time
+    url = normalize_base_url(ollama_url or OLLAMA_URL)
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        try:
+            resp = requests.get(f"{url}/api/ps", timeout=5)
+            if resp.status_code == 200:
+                models = resp.json().get("models", [])
+                if not models:
+                    return True
+        except requests.RequestException:
+            pass
+        _time.sleep(2)
+    return False
 
 
 def _transcribe_openai_compatible(audio_path: Path, url: str, model: str,
@@ -485,6 +526,7 @@ def build_clean_transcript(audio_path: Path, result: dict,
     for bad_start, bad_end in bad_ranges:
         anchor         = _anchor_text(segments, bad_start)
         retry_from     = max(0.0, bad_start - RETRY_OVERLAP_SECONDS)
+        retry_to       = bad_end + RETRY_OVERLAP_SECONDS
         anchor_preview = anchor[-80:].replace("\n", " ")
         _log(f"Retrying from {retry_from/60:.1f} min (anchor: \"{anchor_preview}\")")
 
@@ -492,7 +534,7 @@ def build_clean_transcript(audio_path: Path, result: dict,
             tmp_path = Path(tmp.name)
 
         try:
-            extract_from(audio_path, retry_from, tmp_path)
+            extract_segment(audio_path, retry_from, retry_to, tmp_path)
             retry_result = transcribe(tmp_path, cleanup, prompt=anchor,
                                       hotwords=hotwords,
                                       emit_callback=emit_callback,
@@ -583,6 +625,68 @@ def correct_transcript(transcript: str, names: str = "", roster: str = "",
             stream=True,
             timeout=3600,
         )
+
+        # Auto-pull missing model then retry once (mirrors generate_minutes_ollama)
+        if resp.status_code == 404 and "not found" in resp.text.lower():
+            def _corr_log(msg):
+                print(f"  {msg}")
+                if emit_callback:
+                    try:
+                        emit_callback("log", message=msg, level="info")
+                    except Exception:
+                        pass
+
+            _corr_log(f"Ollama model '{model}' not found — pulling now (this may take several minutes) ...")
+            pull = requests.post(
+                f"{url}/api/pull",
+                json={"name": model, "stream": True},
+                stream=True,
+                timeout=1800,
+            )
+            if pull.status_code != 200:
+                msg = f"Ollama pull failed ({pull.status_code}) — using uncorrected transcript."
+                print(f"  {msg}")
+                if emit_callback:
+                    try:
+                        emit_callback("log", message=msg, level="warn")
+                    except Exception:
+                        pass
+                return transcript
+            last_status = ""
+            for pull_line in pull.iter_lines():
+                if not pull_line:
+                    continue
+                try:
+                    pull_event = json.loads(pull_line)
+                except Exception:
+                    continue
+                status = pull_event.get("status", "")
+                completed = pull_event.get("completed")
+                total = pull_event.get("total")
+                if completed and total and total > 0:
+                    pct = completed / total * 100
+                    pull_msg = f"  Pulling '{model}': {status} — {pct:.1f}% ({completed // 1_048_576} / {total // 1_048_576} MB)"
+                elif status and status != last_status:
+                    pull_msg = f"  Pulling '{model}': {status}"
+                else:
+                    continue
+                last_status = status
+                _corr_log(pull_msg)
+            _corr_log(f"Ollama model '{model}' downloaded and ready. Retrying correction ...")
+            resp = requests.post(
+                f"{url}/api/chat",
+                json={
+                    "model": model,
+                    "stream": True,
+                    "messages": [
+                        {"role": "system", "content": TRANSCRIPT_CORRECTION_PROMPT},
+                        {"role": "user",   "content": user_content},
+                    ],
+                },
+                stream=True,
+                timeout=3600,
+            )
+
         if resp.status_code != 200:
             msg = f"Transcript correction failed ({resp.status_code}) — using uncorrected transcript."
             print(f"  {msg}")
@@ -1065,6 +1169,11 @@ def main():
             if args.transcript_only:
                 print("\nDone (transcript only).")
                 return
+
+        # Free Whisper VRAM before loading the LLM model
+        if not args.skip_transcribe:
+            print("  Unloading Whisper model to free VRAM before LLM stage...")
+            unload_whisper_model(WHISPER_MODEL)
 
         # ── Step 2: Generate minutes ────────────────────────────────────────
         print(f"\n[2/2] Generating meeting minutes (backend: {args.backend}) ...")

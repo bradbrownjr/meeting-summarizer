@@ -527,7 +527,7 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
     from summarize_meeting import (
         transcribe, build_clean_transcript, generate_minutes,
         correct_transcript, convert_to_mp3,
-        unload_whisper_model, unload_ollama_model,
+        unload_whisper_model, unload_ollama_model, wait_for_ollama_idle,
         WHISPER_MODEL, OLLAMA_MODEL,
     )
 
@@ -638,6 +638,15 @@ def _run_job(job_id: str, audio_path: Path, org_id: str,
             progress(100, "Complete", detail="Transcript generated", phase="done")
             log("Done (transcript only.)")
             return
+
+        # ── Free Whisper VRAM before loading Ollama ─────────────────────
+        # Whisper large-v3 and Ollama models can exceed GPU memory if both
+        # are resident simultaneously, locking up the host.
+        log("Unloading Whisper model to free VRAM before LLM stage...")
+        try:
+            unload_whisper_model(_whisper_model or WHISPER_MODEL, whisper_url=_whisper_url)
+        except Exception:
+            pass
 
         # ── Transcript correction pass ──────────────────────────────────
         # The Whisper ASR Box often cannot accept vocabulary hints, so
