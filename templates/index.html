@@ -625,9 +625,9 @@
     <!-- Audio file -->
     <div class="field" style="margin-top:.25rem">
       <label>Audio Recording</label>
-      <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+      <div>
         <button class="btn btn-outline" type="button" id="audio-file-btn" style="font-size:.82rem;padding:.35rem .85rem">&#127897; Choose audio file&hellip;</button>
-        <span id="file-name" style="font-size:.82rem;color:var(--primary);font-weight:600"></span>
+        <div id="file-name" style="font-size:.82rem;color:var(--primary);font-weight:600;margin-top:.35rem"></div>
       </div>
       <p style="font-size:.78rem;color:var(--muted);margin-top:.3rem">MP3, M4A, WAV, OGG, FLAC &mdash; up to 500 MB</p>
       <input type="file" id="file-input" accept=".mp3,.m4a,.wav,.ogg,.flac,.aac,.wma,.opus" style="display:none" />
@@ -1338,10 +1338,13 @@ document.getElementById("back-btn").addEventListener("click", () => {
   document.getElementById("share-hint").style.display = "none";
   document.getElementById("progress-section").style.display = "none";
   document.getElementById("form-section").style.display     = "block";
-  if (window.location.search.includes("job=")) {
-    // pushState (not replaceState) keeps the ?job= URL in browser history
-    // so the browser's Back button can still reach it.
-    history.pushState({}, '', window.location.pathname);
+  // Use history.back() so the browser Forward button naturally returns
+  // to the ?job=<id> URL.  If there is no prior history entry (user
+  // opened the job URL directly), fall back to replaceState.
+  if (window.location.search.includes("job=") && window.history.length > 1) {
+    history.back();
+  } else if (window.location.search.includes("job=")) {
+    history.replaceState({}, '', window.location.pathname);
   }
   refreshActiveJobs();
 });
@@ -1462,9 +1465,13 @@ function listenSSE(jobId) {
   };
   es.onerror = () => {
     es.close(); _activeES = null;
+    // If the user navigated away (back-btn sets currentJobId to null),
+    // don't attempt recovery — it would clobber the form view.
+    if (currentJobId !== jobId) return;
     fetch(`/api/jobs/${jobId}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(j => {
+        if (currentJobId !== jobId) return;
         if (j.status === "done")        showResults(jobId, j.result_md, j.transcript, j.meeting_name);
         else if (j.status === "error")     showJobFailure(jobId, j.error || "Unknown error", true, !!(j.transcript_file || j.transcript));
         else if (j.status === "cancelled") {
@@ -1472,6 +1479,7 @@ function listenSSE(jobId) {
         }
       })
       .catch(status => {
+        if (currentJobId !== jobId) return;
         if (status === 404) {
           showFormError("Job not found \u2014 the server may have restarted.");
         }
