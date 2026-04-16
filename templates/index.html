@@ -122,6 +122,7 @@
     }
     .field input[type=date],
     .field input[type=text],
+    .field input[type=password],
     .field select,
     .field textarea {
       width: 100%;
@@ -648,7 +649,7 @@
 
     <div class="field">
       <label>API Token <span style="font-weight:400;text-transform:none">(optional)</span></label>
-      <input type="password" id="api-token-input" placeholder="Only required if server enforces MEETING_SUMMARIZER_API_TOKEN" autocomplete="off" />
+      <input type="password" id="api-token-input" placeholder="Only required if server enforces an API token" autocomplete="off" />
       <p style="font-size:.78rem;color:var(--muted);margin-top:.3rem">Stored only in this browser (localStorage) and sent as X-API-Token.</p>
     </div>
 
