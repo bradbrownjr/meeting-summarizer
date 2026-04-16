@@ -11,7 +11,7 @@
   <Category>MediaApp:Other Tools:</Category>
   <WebUI>http://[IP]:[PORT:8082]/</WebUI>
   <Icon>https://raw.githubusercontent.com/bradbrownjr/meeting-summarizer/main/docs/icon.png</Icon>
-  <ExtraParams>--restart=unless-stopped</ExtraParams>
+  <ExtraParams>--restart=unless-stopped --add-host=host.docker.internal:host-gateway</ExtraParams>
   <Description>Meeting Summarizer — transcribes audio recordings with distil-Whisper and generates structured meeting minutes via Claude API or a local Ollama model. Configure your own committees via the web UI; settings persist in the Data path.</Description>
 
   <Networking>
@@ -49,6 +49,16 @@
       <Name>ANTHROPIC_API_KEY</Name>
       <Mode/>
     </Variable>
+    <Variable>
+      <Value>http://host.docker.internal:9000</Value>
+      <Name>WHISPER_URL</Name>
+      <Mode/>
+    </Variable>
+    <Variable>
+      <Value>http://host.docker.internal:11434</Value>
+      <Name>OLLAMA_URL</Name>
+      <Mode/>
+    </Variable>
   </Environment>
 
   <Config Name="Web UI Port" Target="8082" Default="8082" Mode="tcp"
@@ -70,4 +80,12 @@
   <Config Name="Anthropic API Key" Target="ANTHROPIC_API_KEY" Default="" Mode=""
           Description="Your Anthropic API key for Claude-based minute generation. Leave blank to use Ollama instead."
           Type="Variable" Display="always" Required="false" Mask="true"></Config>
+
+  <Config Name="Whisper URL" Target="WHISPER_URL" Default="http://host.docker.internal:9000" Mode=""
+          Description="URL of your Whisper/speaches STT server. If it runs on another machine (e.g. a GPU rig), use that host's IP:port."
+          Type="Variable" Display="always" Required="true" Mask="false">http://host.docker.internal:9000</Config>
+
+  <Config Name="Ollama URL" Target="OLLAMA_URL" Default="http://host.docker.internal:11434" Mode=""
+          Description="URL of your Ollama server. If it runs on another machine (e.g. a GPU rig), use that host's IP:port."
+          Type="Variable" Display="always" Required="true" Mask="false">http://host.docker.internal:11434</Config>
 </Container>

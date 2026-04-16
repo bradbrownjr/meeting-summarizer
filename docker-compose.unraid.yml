@@ -9,8 +9,12 @@ services:
       - /mnt/user/appdata/meeting-summarizer/hf-cache:/root/.cache/huggingface
       - /mnt/user/appdata/meeting-summarizer/data:/data
       - /mnt/user/appdata/meeting-summarizer/templates:/templates
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - WHISPER_URL=http://host.docker.internal:9000
+      - OLLAMA_URL=http://host.docker.internal:11434
       - UPLOAD_DIR=/data/jobs
       - DATA_DIR=/data
       - TEMPLATES_DIR=/templates
