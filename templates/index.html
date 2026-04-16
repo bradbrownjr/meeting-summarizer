@@ -1339,7 +1339,9 @@ document.getElementById("back-btn").addEventListener("click", () => {
   document.getElementById("progress-section").style.display = "none";
   document.getElementById("form-section").style.display     = "block";
   if (window.location.search.includes("job=")) {
-    history.replaceState({}, '', window.location.pathname);
+    // pushState (not replaceState) keeps the ?job= URL in browser history
+    // so the browser's Back button can still reach it.
+    history.pushState({}, '', window.location.pathname);
   }
   refreshActiveJobs();
 });
@@ -1706,19 +1708,15 @@ function _timeAgo(ts) {
   return `${Math.floor(sec/3600)}h ago`;
 }
 
-// Kick off on page load (only when showing the form, not when resuming a job)
-if (!new URLSearchParams(window.location.search).get("job")) {
-  refreshActiveJobs();
-}
-
-// ── Reconnect to a job from URL (?job=<id>) ────────────────────────────────
-(function () {
-  const jobId = new URLSearchParams(window.location.search).get("job");
-  if (!jobId) return;
+// ── Load (or reconnect to) a job by ID ────────────────────────────────────
+function _loadJobView(jobId) {
+  if (_activeES) { _activeES.close(); _activeES = null; }
   currentJobId = jobId;
+  logBox.innerHTML = "";
   document.getElementById("form-section").style.display     = "none";
+  document.getElementById("result-section").style.display   = "none";
   document.getElementById("progress-section").style.display = "block";
-  const shareHref = window.location.href;
+  const shareHref = window.location.origin + window.location.pathname + '?job=' + jobId;
   const shareLink = document.getElementById("share-url");
   shareLink.href        = shareHref;
   shareLink.textContent = shareHref;
@@ -1738,7 +1736,7 @@ if (!new URLSearchParams(window.location.search).get("job")) {
         (j.logs || []).forEach(m => appendLog(m, "info"));
         showJobFailure(jobId, j.error || "Job failed.", false, !!(j.transcript_file || j.transcript));
       } else if (j.status === "cancelled") {
-        showFormError(j.error || "Job failed.");
+        showFormError(j.error || "Job cancelled.");
       } else {
         // In-progress or queued: replay logs then stream live
         (j.logs || []).forEach(m => appendLog(m, "info"));
@@ -1755,12 +1753,39 @@ if (!new URLSearchParams(window.location.search).get("job")) {
       if (status === 404) {
         // Job not in memory (server restarted) — show a clean message
         showFormError("Job not found \u2014 the server may have restarted. Please submit a new job.");
+        document.getElementById("progress-section").style.display = "none";
+        document.getElementById("form-section").style.display     = "block";
       } else {
         setStatus("Connecting\u2026");
         listenSSE(jobId);
       }
     });
-})();
+}
+
+// ── Handle browser back/forward (popstate) ────────────────────────────────
+window.addEventListener("popstate", () => {
+  const jobId = new URLSearchParams(window.location.search).get("job");
+  if (jobId) {
+    _loadJobView(jobId);
+  } else {
+    // Navigated back to the form
+    if (_activeES) { _activeES.close(); _activeES = null; }
+    currentJobId = null;
+    document.getElementById("share-hint").style.display       = "none";
+    document.getElementById("progress-section").style.display = "none";
+    document.getElementById("result-section").style.display   = "none";
+    document.getElementById("form-section").style.display     = "block";
+    refreshActiveJobs();
+  }
+});
+
+// Kick off on page load
+const _initialJobId = new URLSearchParams(window.location.search).get("job");
+if (_initialJobId) {
+  _loadJobView(_initialJobId);
+} else {
+  refreshActiveJobs();
+}
 </script>
 </body>
 </html>
